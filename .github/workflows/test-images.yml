@@ -1,5 +1,10 @@
 name: Test images manager
 
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
 on:
   workflow_run:
     workflows: [Trigger test images]
@@ -11,6 +16,7 @@ env:
 jobs:
   setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       branch_ref: ${{ steps.variables.outputs.branch_ref }}
       pr_type: ${{ steps.variables.outputs.pr_type }}
@@ -29,34 +35,22 @@ jobs:
       - name: Store variables
         id: variables
         run: |
-          echo branch_ref=$(cat trigger-information.json | jq -r '.branch_ref') >> "$GITHUB_OUTPUT"
-          echo pr_type=$(cat trigger-information.json | jq -r '.pr_type') >> "$GITHUB_OUTPUT"
-          echo pr_number=$(cat trigger-information.json | jq -r '.pr_number') >> "$GITHUB_OUTPUT"
-          echo commit_hash=$(cat trigger-information.json | jq -r '.commit_hash') >> "$GITHUB_OUTPUT"
-
-  # TODO
-  # delete-images:
-  #   runs-on: ubuntu-latest
-  #   if: ${{ needs.setup.outputs.pr_type == 'closed' }}
-  #   needs: setup
-  #   steps:
-  #     - name: Delete test images
-  #       run: |
-  #         podman search --list-tags $REPOSITORY/rc-pelorus-exporter
-  #         podman search --list-tags $REPOSITORY/rc-pelorus-operator
-  #         podman search --list-tags $REPOSITORY/rc-pelorus-operator-bundle
-  #         delete all that have pr${{ needs.setup.outputs.pr_number }} in name...
+          echo "branch_ref=$(jq -r '.branch_ref' trigger-information.json)" >> "$GITHUB_OUTPUT"
+          echo "pr_type=$(jq -r '.pr_type' trigger-information.json)" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$(jq -r '.pr_number' trigger-information.json)" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=$(jq -r '.commit_hash' trigger-information.json)" >> "$GITHUB_OUTPUT"
 
   create-images:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: setup
     steps:
       - name: Validate outputs from setup jobs
         env:
-          BRANCH_REF: ${{ steps.variables.outputs.branch_ref }}
-          PR_TYPE: ${{ steps.variables.outputs.pr_type }}
-          PR_NUMBER: ${{ steps.variables.outputs.pr_number }}
-          COMMIT_HASH: ${{ steps.variables.outputs.commit_hash }}
+          BRANCH_REF: ${{ needs.setup.outputs.branch_ref }}
+          PR_TYPE: ${{ needs.setup.outputs.pr_type }}
+          PR_NUMBER: ${{ needs.setup.outputs.pr_number }}
+          COMMIT_HASH: ${{ needs.setup.outputs.commit_hash }}
         run: echo "$BRANCH_REF, $PR_TYPE, $PR_NUMBER, $COMMIT_HASH"
       - name: Checkout code
         uses: actions/checkout@v4

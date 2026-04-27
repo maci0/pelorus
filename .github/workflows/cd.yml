@@ -1,9 +1,12 @@
 name: Continuous Delivery
 
+permissions:
+  contents: write
+  pull-requests: write
+
 on:
   push:
     branches:
-      - master
       - main
 
 env:
@@ -13,6 +16,7 @@ env:
 jobs:
   setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version_change: ${{ steps.variables.outputs.version_change }}
       is_release: ${{ steps.variables.outputs.is_release }}
@@ -22,13 +26,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         id: changes
         with:
           filters: |
             version_change:
               - 'exporters/**'
-              - 'charts/**'
+              - 'pelorus-operator/helm-charts/**'
               - 'pelorus-operator/**'
 
       - uses: actions/upload-artifact@v4
@@ -39,33 +43,35 @@ jobs:
       - name: Store variables
         id: variables
         run: |
-          echo version_change=${{ steps.changes.outputs.version_change }} >> "$GITHUB_OUTPUT"
-          if [[ ${{ steps.changes.outputs.version_change }} == "true" ]];then
-            export CURRENT_CHART_VERSION="$(grep '^version: ' charts/pelorus/Chart.yaml  | cut -c 10-)"
+          echo "version_change=${{ steps.changes.outputs.version_change }}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ steps.changes.outputs.version_change }}" == "true" ]];then
+            export CURRENT_CHART_VERSION="$(grep '^version: ' pelorus-operator/helm-charts/pelorus/Chart.yaml  | cut -c 10-)"
             if [[ $CURRENT_CHART_VERSION == *"rc"* ]];then
               echo "tags=$(echo latest,${{ github.sha }},v$CURRENT_CHART_VERSION)" >> "$GITHUB_OUTPUT"
-              echo is_release=false >> "$GITHUB_OUTPUT"
+              echo "is_release=false" >> "$GITHUB_OUTPUT"
             else
               echo "tags=$(echo stable,latest,${{ github.sha }},v$CURRENT_CHART_VERSION)" >> "$GITHUB_OUTPUT"
-              echo is_release=true >> "$GITHUB_OUTPUT"
+              echo "is_release=true" >> "$GITHUB_OUTPUT"
               export CURRENT_OPERATOR_VERSION="$(grep "^VERSION ?= " pelorus-operator/Makefile  | cut -c 12-)"
-              echo version=$CURRENT_OPERATOR_VERSION >> "$GITHUB_OUTPUT"
+              echo "version=$CURRENT_OPERATOR_VERSION" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo is_release=false >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
   release_drafter:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: needs.setup.outputs.is_release == 'false'
     needs: setup
     steps:
-      - uses: release-drafter/release-drafter@v5
+      - uses: release-drafter/release-drafter@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-and-push-exporters-images:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: ${{ fromJSON(needs.setup.outputs.version_change) }}
     needs: setup
     steps:
@@ -119,6 +125,7 @@ jobs:
 
   build-and-push-operator-images:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: ${{ fromJSON(needs.setup.outputs.is_release) }}
     needs: setup
     steps:
@@ -146,6 +153,7 @@ jobs:
 
   create-pr-in-community-operators-prod:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: ${{ fromJSON(needs.setup.outputs.is_release) }}
     needs: [setup, build-and-push-operator-images]
     steps:
@@ -168,7 +176,7 @@ jobs:
           mkdir -p operators/pelorus-operator/${{ needs.setup.outputs.version }}
 
       - name: Download operator code
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: operator-code
           path: operators/pelorus-operator/${{ needs.setup.outputs.version }}
@@ -182,7 +190,7 @@ jobs:
           git push origin pelorus-operator-${{ needs.setup.outputs.version }}
 
       - name: Create PR
-        uses: "dora-metrics/pelorus/.github/workflow_templates/create-market-place-pr@master"
+        uses: "dora-metrics/pelorus/.github/workflow_templates/create-market-place-pr@main"
         with:
           token: ${{ secrets.FORK_USER_TOKEN }}
           version: ${{ needs.setup.outputs.version }}

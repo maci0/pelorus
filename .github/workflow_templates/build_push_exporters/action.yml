@@ -20,11 +20,11 @@ runs:
       shell: bash
       run: |
         FULL_IMAGE_NAME=quay.io/${{ inputs.quay_imagenamespace }}/${{ inputs.image }}
-        echo "FULL_IMAGE_NAME=$FULL_IMAGE_NAME" >> $GITHUB_ENV
-        echo "PARSED_TAGS=$(for tag in $(echo ${{ inputs.tags }} | tr "," " ");do echo -n "--tag $FULL_IMAGE_NAME:$tag ";done)" >> $GITHUB_ENV
+        echo "FULL_IMAGE_NAME=$FULL_IMAGE_NAME" >> "$GITHUB_ENV"
+        echo "PARSED_TAGS=$(for tag in $(echo ${{ inputs.tags }} | tr "," " ");do echo -n "--tag $FULL_IMAGE_NAME:$tag ";done)" >> "$GITHUB_ENV"
 
     - name: Login to Quay.io (docker)
-      uses: docker/login-action@v2
+      uses: docker/login-action@v3
       with:
         username: ${{ inputs.quay_username }}
         password: ${{ inputs.quay_password }}
