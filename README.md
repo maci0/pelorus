@@ -10,6 +10,7 @@ Pelorus measures software delivery performance using the four DORA metrics: Lead
 
 - OpenShift 4.20+ (CRC: 6 CPUs, 16GB RAM, 50GB disk) or Kubernetes 1.33+ cluster
 - [Helm](https://helm.sh/docs/intro/install/) v3+
+- Python 3.11+ and [uv](https://docs.astral.sh/uv/) (for development only)
 
 ### Operator Dependencies
 
@@ -28,10 +29,15 @@ On OpenShift with cluster monitoring enabled, the install script also enables us
 # Build + install everything on OpenShift (auto-detects operator source)
 ./demo/install.sh
 
+# Or customize the install
+OPERATOR_SOURCE=community OAUTH_ENABLED=false ./demo/install.sh
+
 # Seed sample DORA metrics for 4 applications
 oc port-forward -n pelorus svc/webhook-exporter 18080:8080 &
 ./demo/seed-metrics.sh http://localhost:18080
 ```
+
+OAuth proxy is enabled by default. Grafana uses OpenShift SSO login. Set `OAUTH_ENABLED=false` for basic username/password auth.
 
 The install script:
 1. Creates the `pelorus` namespace
@@ -117,7 +123,6 @@ kind: Pelorus
 metadata:
   name: pelorus
 spec:
-  oauth_proxy_enabled: false
   exporters:
     instances:
       - app_name: deploytime-exporter

@@ -14,7 +14,7 @@ oc port-forward -n pelorus svc/webhook-exporter 18080:8080 &
 
 # 3. Open Grafana (wait ~60s for Prometheus to scrape)
 #    Route: https://grafana-route-pelorus.apps-crc.testing
-#    Login: admin / $PELORUS_PASSWORD
+#    Login: OpenShift SSO (default) or admin/$PELORUS_PASSWORD (OAUTH_ENABLED=false)
 #    Time range: Last 5 minutes
 ```
 
@@ -76,5 +76,7 @@ See [tekton-demo-setup/README.md](tekton-demo-setup/README.md) for details.
 |---|---|---|
 | `NAMESPACE` | `pelorus` | Target namespace |
 | `OPERATOR_SOURCE` | `auto` | `redhat`, `community`, or `auto` (prefer redhat) |
-| `TIMEOUT` | `300` | Wait timeout in seconds |
+| `OAUTH_ENABLED` | `true` | Enable OAuth proxy (OpenShift SSO). Set `false` for basic auth |
+| `PELORUS_PASSWORD` | random | Grafana admin password (basic auth) / Prometheus htpasswd |
+| `TIMEOUT` | `900` | Wait timeout in seconds |
 | `WEBHOOK_URL` | auto-detect | Webhook exporter endpoint |

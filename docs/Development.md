@@ -449,7 +449,8 @@ Code also comes with a nice debugger feature. Here is a starter configuration to
             "env": {
                 "LOG_LEVEL": "INFO",
                 "APP_LABEL": "app.kubernetes.io/name"
-            }        },
+            }
+        },
         {
             "name": "Failure Exporter",
             "type": "python",

@@ -108,7 +108,7 @@ Create Pelorus Operator Subscription object YAML file that uses pelorus namespac
     name: pelorus-operator
     namespace: pelorus
   spec:
-    channel: alpha
+    channel: stable
     name: pelorus-operator
     source: community-operators
     sourceNamespace: openshift-marketplace
@@ -122,7 +122,7 @@ Verify the pelorus-operator Subscription (sub) has been successfully created:
   ```
   $ oc get sub pelorus-operator -n pelorus
   NAME               PACKAGE            SOURCE                CHANNEL
-  pelorus-operator   pelorus-operator   community-operators   alpha
+  pelorus-operator   pelorus-operator   community-operators   stable
   ```
 Verify the ClusterServiceVersion (csv) for Pelorus Operator together with Grafana and Prometheus were successfully created:
   ```shell
