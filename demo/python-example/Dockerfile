@@ -1,2 +1,6 @@
-FROM ubi9/python-30:latest
+FROM registry.access.redhat.com/ubi9/python-312:1
 COPY example.py .
+COPY response.txt .
+USER 1001
+EXPOSE 8080
+CMD ["python", "example.py"]
