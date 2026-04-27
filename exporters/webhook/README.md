@@ -1,8 +1,6 @@
 # Webhook Exporter
 
-A simple Webhook exporter written using FastAPI and pydantic that exposes metrics to the prometheus endpoint.
-
-Currently only some of the commit time data is received, no SSL/salt to secure the data. It's PoC.
+A Webhook exporter written using FastAPI and pydantic that exposes metrics to the Prometheus endpoint. Supports committime, deploytime, and failure metric types with optional HMAC payload verification.
 
 ## Testing
 
@@ -32,7 +30,7 @@ $ FAILURE_CREATE_TIMESTAMP=$(date -d '19 min ago' +%s)
 $ FAILURE_RESOLVED_TIMESTAMP=$(date +%s)
 
 # Copy test files to the temp directory, so we don't modify the ones from the git repository
-$ TMP_DIR=$(mkfile -d)
+$ TMP_DIR=$(mktemp -d)
 $ cp webhook_pelorus_*.json "$TMP_DIR"
 $ pushd "$TMP_DIR"
 
@@ -55,14 +53,14 @@ Navigate to the endpoint [http://localhost:8080/metrics](http://localhost:8080/m
 ```
 # HELP commit_timestamp Commit timestamp
 # TYPE commit_timestamp gauge
-commit_timestamp{app="mongo-todolist",commit_hash="5379bad65a3f83853a75aabec9e0e43c75fd18fc",image_sha="sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d",namespace="mongo-persistent"} 1.682936938e+09
+commit_timestamp{app="mongo-todolist",commit="5379bad65a3f83853a75aabec9e0e43c75fd18fc",image_sha="sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d",namespace="mongo-persistent"} 1.682936938e+09
 # HELP deploy_timestamp Deployment timestamp
 # TYPE deploy_timestamp gauge
 deploy_timestamp{app="mongo-todolist",image_sha="sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d",namespace="mongo-persistent"} 1.683022138e+09 1683022138000
 # HELP failure_creation_timestamp Failure Creation Timestamp
 # TYPE failure_creation_timestamp gauge
-failure_creation_timestamp{app="mongo-todolist",failure_id="MONGO-1"} 1.683022198e+09
+failure_creation_timestamp{app="mongo-todolist",issue_number="MONGO-1"} 1.683022198e+09
 # HELP failure_resolution_timestamp Failure Resolution Timestamp
 # TYPE failure_resolution_timestamp gauge
-failure_resolution_timestamp{app="mongo-todolist",failure_id="MONGO-1"} 1.683023338e+09
+failure_resolution_timestamp{app="mongo-todolist",issue_number="MONGO-1"} 1.683023338e+09
 ```

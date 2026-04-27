@@ -208,7 +208,7 @@ class RequestsUser:
     _session: Session = field(factory=Session, init=False)
 
     def __attrs_post_init__(self):
-        self._session.auth = (self.api_user, self.api_token)
+        self._session.auth = (self.api_user, self.token)
 ```
 
 Note that we still declare the field. This is nice for type checking tools,

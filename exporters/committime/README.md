@@ -9,7 +9,7 @@ The job of the commit time exporter is to find and associate time of the relevan
 
 In order for proper collection, we require that all builds associated with a particular application be labelled with a common label (`app.kubernetes.io/name` by default).
 
-Configuration options can be found in the [config guide](/docs/Configuration.md)
+Configuration options can be found in the [config guide](https://pelorus.readthedocs.io/en/latest/GettingStarted/configuration/ExporterCommittime/)
 
 ## Supported Integrations
 

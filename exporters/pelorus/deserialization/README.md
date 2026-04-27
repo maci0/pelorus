@@ -80,11 +80,10 @@ the "origin" (`Union` and `dict`), and the arguments (`(str, None)` and `(str, i
 It's important to understand that `dict[str, int]` _is not a type_.
 It will not work in `isinstance(x, dict[str, int])`.  However, `dict` _is_ a type.
 
-# For the Future
+# Notes on Union types
 
-From python 3.5 until python 3.10, there were two ways to express a value that can be a certain type or `None`.
-`Untion[SomeType, None]`, or `Optional[SomeType]` (which is actually just an alias for the former!).
+From Python 3.5 until 3.10, there were two ways to express a nullable type:
+`Union[SomeType, None]`, or `Optional[SomeType]` (an alias for the former).
 
-In python 3.10, you can express this as `SomeType | None`.
-It's semantically the same, but is represented as a `types.UnionType`.
-That will have to be added to our codebase for 3.10 support.
+Since Python 3.10, `SomeType | None` is also supported, represented as `types.UnionType`.
+The codebase currently uses `Optional[T]`; support for the `|` syntax could be added.

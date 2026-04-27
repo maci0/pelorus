@@ -39,7 +39,7 @@ only to find that they missed the second required env var.
 Errors that can be reported in parallel absolutely should be reported in parallel.
 
 This idea (in the abstract) is even acknowledged by python itself
-in the upcoming "exception groups" feature.
+in the "exception groups" feature (built into Python 3.11+).
 
 # What is `NOTHING`?
 

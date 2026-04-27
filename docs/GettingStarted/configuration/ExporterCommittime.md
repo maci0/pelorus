@@ -313,7 +313,7 @@ oc -n "${NS}" new-app "${NAME}" -l "app.kubernetes.io/name=${NAME}"
 
 ### Additional Examples
 
-There are many ways to build and deploy applications in OpenShift. Additional examples of how to annotate builds such that Pelorus will properly discover the commit metadata can be found in the  [Pelorus tekton demo](https://github.com/dora-metrics/pelorus/tree/master/demo)
+There are many ways to build and deploy applications in OpenShift. Additional examples of how to annotate builds such that Pelorus will properly discover the commit metadata can be found in the  [Pelorus tekton demo](https://github.com/dora-metrics/pelorus/tree/main/demo)
 
 ## OpenShift Image Object - Annotations and Labels support
 
