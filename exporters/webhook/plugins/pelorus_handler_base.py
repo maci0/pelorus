@@ -17,10 +17,10 @@
 import http
 from abc import ABC, abstractmethod
 from json import JSONDecodeError
-from typing import Any, Awaitable, Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException as FastapiHTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.datastructures import Headers as StarletteHeaders
 from starlette.requests import Request as StarletteRequest
 
@@ -35,30 +35,24 @@ class HTTPException(FastapiHTTPException):
 
 
 class Headers(StarletteHeaders):
-    """
-    Headers class used to ensure plugins can import direct class from the
-    Pelorus and not starlette, even if it's same structure.
-    """
+    pass
 
 
 class Request(StarletteRequest):
-    """
-    Request class used to ensure plugins can import direct class from the
-    Pelorus and not starlette, even if it's same structure.
-    """
+    pass
 
 
-# TODO this shouldn't be a model?
 class PelorusWebhookResponse(BaseModel):
     """
     Class that represents the response to the user-agent making request.
     """
+    model_config = {"arbitrary_types_allowed": True}
 
     http_response: str
-    http_response_code: http.HTTPStatus
+    http_response_code: int = Field(ge=100, le=599)
 
     @classmethod
-    def pong(cls, payload_headers: Any):
+    def pong(cls, payload: Any):
         """
         Special case of response which raises "pong" type of message for
         the webhook that sent "ping" request.
@@ -94,7 +88,7 @@ class PelorusWebhookPlugin(ABC):
     classes from the incoming payload, which is in json format.
 
     Attributes:
-        handshake_headers: (Headers): Headers that are received by the webhook.
+        headers: (Headers): Headers that are received by the webhook.
         request: (Request): The request object associated with the webhook.
         secret: Optional[str]: Webhook secret, if provided header must contain
                                X-Hub-Signature-256 signature.
@@ -112,35 +106,34 @@ class PelorusWebhookPlugin(ABC):
         self.secret = secret
 
     @abstractmethod
-    async def _handshake(self, headers: Headers) -> Awaitable[bool]:
+    async def _handshake(self, headers: Headers) -> bool:
         raise NotImplementedError  # pragma no cover
 
     @abstractmethod
     async def _receive_pelorus_payload(
         self, json_payload_data: Any
-    ) -> Awaitable[PelorusMetric]:
+    ) -> PelorusMetric:
         raise NotImplementedError  # pragma no cover
 
-    async def handshake(self) -> Awaitable[Optional[bool]]:
+    async def handshake(self) -> Optional[bool]:
         """
         Wrapper method to call plugin's _handshake().
 
         Returns:
-            bool: True if handhsake was success
+            bool: True if handshake was successful
 
         Raises:
             HTTPException: If handshake did not succeed
         """
         return await self._handshake(self.headers)
 
-    async def receive(self) -> Awaitable[PelorusMetric]:
+    async def receive(self) -> PelorusMetric:
         """
-        Wrapper method that calls the _receive() method
-        which gets the payload data in the json_format
-        and passes it to the plugin's _receive_pelorus_payload().
+        Wrapper that calls _receive() to get the JSON payload,
+        then passes it to _receive_pelorus_payload() for validation.
 
         Returns:
-            Awaitable[PelorusMetric]: Pelorus Metric from the plugin
+            PelorusMetric: Pelorus Metric from the plugin
 
         Raises:
             TypeError: if data was not proper PelorusMetric
@@ -151,12 +144,12 @@ class PelorusWebhookPlugin(ABC):
             raise TypeError("Webhook must be a subclass of PelorusMetric")
         return webhook_data
 
-    async def _receive(self) -> Awaitable[Any]:
+    async def _receive(self) -> Any:
         """
         Method to receive json data from the request.
 
         Returns:
-            Awaitable[Any]: json data from the request.
+            Any: json data from the request.
 
         Raises:
             HTTPException: If data was not proper json format

@@ -30,7 +30,7 @@ import requests.auth
 import urllib3
 from kubernetes import client, config
 from kubernetes.dynamic import Resource, ResourceInstance
-from openshift.dynamic import DynamicClient
+from kubernetes.dynamic import DynamicClient
 
 from pelorus.certificates import set_up_requests_certs
 from pelorus.utils.nested import (
@@ -51,16 +51,14 @@ class SpecializeDebugFormatter(logging.Formatter):
 
     DEBUG_FORMAT = "%(asctime)-15s %(levelname)-8s %(pathname)s:%(lineno)d %(funcName)s() %(message)s"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._debug_formatter = logging.Formatter(self.DEBUG_FORMAT)
+
     def format(self, record):
-        prior_format = self._style._fmt
-
-        try:
-            if record.levelno == logging.DEBUG:
-                self._style._fmt = self.DEBUG_FORMAT
-
-            return logging.Formatter.format(self, record)
-        finally:
-            self._style._fmt = prior_format
+        if record.levelno == logging.DEBUG:
+            return self._debug_formatter.format(record)
+        return super().format(record)
 
 
 @overload
@@ -142,6 +140,9 @@ class TokenAuth(requests.auth.AuthBase):
 
     def __init__(self, token: str, is_pagerduty: bool = False):
         self.auth_str = f"Token token={token}" if is_pagerduty else f"token {token}"
+
+    def __repr__(self):
+        return "TokenAuth(***)"
 
     def __call__(self, r: requests.PreparedRequest):
         r.headers["Authorization"] = self.auth_str
@@ -248,9 +249,10 @@ class Url(urllib3.util.Url):
 
     @property
     def url(self) -> str:
+        obj = self
         if self.path and not self.path.startswith("/"):
-            self = self._replace(path=f"/{self.path}")
-        return super(Url, self).url
+            obj = self._replace(path=f"/{self.path}")
+        return super(Url, obj).url
 
     def __bool__(self):
         return any(self)

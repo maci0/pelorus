@@ -9,7 +9,7 @@ from pelorus.config.converters import pass_through
 from pelorus.utils import Url, set_up_requests_session
 from provider_common.github import parse_datetime
 
-from .collector_base import AbstractCommitCollector, UnsupportedGITProvider
+from .collector_base import AbstractCommitCollector, check_provider_support
 
 DEFAULT_GITHUB_API = Url.parse("api.github.com")
 
@@ -33,18 +33,9 @@ class GitHubCommitCollector(AbstractCommitCollector):
         )
 
     def get_commit_time(self, metric: CommitMetric):
-        """Method called to collect data and send to Prometheus"""
+        """Fetch commit timestamp from GitHub API for the given metric."""
         git_server = metric.git_fqdn
-        # check for gitlab or bitbucket
-        if (
-            "gitea" in git_server
-            or "gitlab" in git_server
-            or "bitbucket" in git_server
-            or "azure" in git_server
-        ):
-            raise UnsupportedGITProvider(
-                "Skipping non GitHub server, found %s" % (git_server)
-            )
+        check_provider_support(git_server, "github")
 
         path = self._path_pattern.format(
             group=metric.repo_group,
@@ -52,17 +43,16 @@ class GitHubCommitCollector(AbstractCommitCollector):
             hash=metric.commit_hash,
         )
         url = self.git_api._replace(path=path).url
-        response = self.session.get(url)
+        response = self.session.get(url, timeout=30)
         if response.status_code != 200:
-            # This will occur when trying to make an API call to non-Github
-            logging.warning(
-                "Unable to retrieve commit time for build: %s, hash: %s, url: %s. Got http code: %s"
-                % (
-                    metric.build_name,
-                    metric.commit_hash,
-                    metric.git_fqdn,
-                    str(response.status_code),
-                )
+            log_level = logging.ERROR if response.status_code in (401, 403) else logging.WARNING
+            logging.log(
+                log_level,
+                "Unable to retrieve commit time for build: %s, hash: %s, url: %s. Got http code: %s",
+                metric.build_name,
+                metric.commit_hash,
+                metric.git_fqdn,
+                response.status_code,
             )
         else:
             commit = response.json()
@@ -70,12 +60,17 @@ class GitHubCommitCollector(AbstractCommitCollector):
                 metric.commit_time = commit["commit"]["committer"]["date"]
                 metric.commit_timestamp = parse_datetime(metric.commit_time).timestamp()
                 metric.commit_link = commit["html_url"]
-                logging.debug(f"Set all github commit metrics: {metric}")
-            except Exception:
+                logging.debug("Set all github commit metrics: %s", metric)
+            except (KeyError, TypeError, AttributeError):
                 logging.error(
-                    "Failed processing commit time for build %s" % metric.build_name,
+                    "Failed processing commit time for build %s",
+                    metric.build_name,
                     exc_info=True,
                 )
-                logging.debug(commit)
+                commit_info = (
+                    list(commit.keys()) if isinstance(commit, dict)
+                    else type(commit).__name__
+                )
+                logging.debug("Raw commit response keys: %s", commit_info)
                 raise
         return metric

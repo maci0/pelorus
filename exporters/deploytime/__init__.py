@@ -1,3 +1,4 @@
+import types
 from datetime import datetime
 
 from attrs import field, frozen
@@ -9,17 +10,13 @@ from provider_common.openshift import convert_datetime
 class DeployTimeMetric:
     name: str
     namespace: str
-    # WARNING: do not mutate the dict after hashing or things may break.
-    labels: dict[str, str]
+    labels: types.MappingProxyType = field(converter=types.MappingProxyType)
     deploy_time: datetime = field(converter=convert_datetime)
     image_sha: str
+    _hash: int = field(init=False, repr=False, eq=False, hash=False)
 
-    @property
-    def deploy_time_timestamp(self) -> float:
-        return self.deploy_time.timestamp()
-
-    def __hash__(self):
-        return hash(
+    def __attrs_post_init__(self):
+        h = hash(
             (
                 self.name,
                 self.namespace,
@@ -28,6 +25,14 @@ class DeployTimeMetric:
                 self.image_sha,
             )
         )
+        object.__setattr__(self, "_hash", h)
+
+    @property
+    def deploy_time_timestamp(self) -> float:
+        return self.deploy_time.timestamp()
+
+    def __hash__(self):
+        return self._hash
 
 
 __all__ = ["DeployTimeMetric"]

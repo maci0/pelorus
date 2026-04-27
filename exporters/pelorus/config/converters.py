@@ -7,6 +7,8 @@ from typing import Callable, Collection, Iterator, TypeVar, Union
 
 CollectionType = TypeVar("CollectionType", bound=Collection[str])
 
+_WHITESPACE_RE = re.compile(r"\s+")
+
 T = TypeVar("T")
 U = TypeVar("U")
 
@@ -44,7 +46,7 @@ def comma_or_whitespace_separated(
 
     def _converter(value: Union[str, CollectionType]):
         if isinstance(value, str):
-            replaced = re.sub(r"\s+", ",", value)
+            replaced = _WHITESPACE_RE.sub(",", value)
             return collection(part.strip() for part in replaced.split(","))
         else:
             return value

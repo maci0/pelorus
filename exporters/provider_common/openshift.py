@@ -1,12 +1,13 @@
 import logging
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple, Union
 
-from openshift.dynamic import DynamicClient, ResourceInstance
-from openshift.dynamic.exceptions import ResourceNotFoundError
-from openshift.dynamic.resource import ResourceField
+from kubernetes.dynamic import DynamicClient, ResourceInstance
+from kubernetes.dynamic.exceptions import ResourceNotFoundError
+from kubernetes.dynamic.resource import ResourceField
 
 from pelorus.timeutil import parse_assuming_utc
 
@@ -18,6 +19,16 @@ SUPPORTED_REPLICA_OBJECTS = ["ReplicaSet", "ReplicationController"]
 # Cache threshold in seconds, used by every cached_parents_dict entry
 CACHE_THRESHOLD_1_DAY = 60 * 60 * 24
 cached_parents_dict: dict[str, Tuple[ResourceInstance, float]] = {}
+_cache_lock = threading.Lock()
+
+# Pre-compiled regex for container image URI parsing
+_CONTAINER_IMAGE_URI_RE = re.compile(
+    r"^(?P<registry>[^/]+/[^/]+/)?(?P<image_name>[^@]+)@(?P<sha256_value>sha256:[a-fA-F0-9]{64})$"
+)
+
+# Throttle cache expiration scans to at most once per minute
+_last_expiration_time: float = 0.0
+_EXPIRATION_INTERVAL = 60.0
 
 
 def _add_object_to_cache(uid: str, k8s_obj: ResourceInstance) -> None:
@@ -28,31 +39,41 @@ def _add_object_to_cache(uid: str, k8s_obj: ResourceInstance) -> None:
     We have also 'timeout' for each cache entry, which means
     we won't grow the cache infinitely.
     """
-    if uid not in cached_parents_dict:
-        cached_parents_dict[uid] = (k8s_obj, time.time())
+    with _cache_lock:
+        if uid not in cached_parents_dict:
+            cached_parents_dict[uid] = (k8s_obj, time.time())
 
 
 def _get_object_from_cache(uid: str) -> ResourceInstance:
     """
     Gets the object from the cache by it's uid.
     """
-    k8s_obj, _ = cached_parents_dict.get(uid) or (None, None)
+    with _cache_lock:
+        k8s_obj, _ = cached_parents_dict.get(uid) or (None, None)
     return k8s_obj
 
 
 def _remove_expired_objects() -> None:
     """
     Cleanup function to remove expired objects from the cache.
+    Throttled to run at most once per _EXPIRATION_INTERVAL seconds.
     """
-    current_time = time.time()
+    global _last_expiration_time
 
-    expired_keys = [
-        uid
-        for uid, (_, insertion_time) in cached_parents_dict.items()
-        if current_time - insertion_time > CACHE_THRESHOLD_1_DAY
-    ]
-    for uid in expired_keys:
-        if uid in cached_parents_dict:
+    with _cache_lock:
+        current_time = time.time()
+
+        if current_time - _last_expiration_time < _EXPIRATION_INTERVAL:
+            return
+
+        _last_expiration_time = current_time
+
+        expired_keys = [
+            uid
+            for uid, (_, insertion_time) in cached_parents_dict.items()
+            if current_time - insertion_time > CACHE_THRESHOLD_1_DAY
+        ]
+        for uid in expired_keys:
             del cached_parents_dict[uid]
 
 
@@ -98,12 +119,12 @@ def get_running_pods(
                              OpenShift cluster that meet the criteria.
     """
 
-    v1_services = client.resources.get(api_version="v1", kind="Pod")
+    v1_pods = client.resources.get(api_version="v1", kind="Pod")
 
     pods = []
 
     for ns in namespaces or {""}:
-        pods += v1_services.get(
+        pods += v1_pods.get(
             label_selector=app_label,
             field_selector="status.phase=Running",
             namespace=ns,
@@ -136,10 +157,10 @@ def get_owner_object_from_child(
         child_object (ResourceField): The Child object that contains the reference to the Parent object.
 
     Returns:
-        Dict[str, ResourceField]: A dictionary with the UID of the Parent object as the key
-                                  and the Parent object itself as the value.
-                                  An empty dictionary is returned if the Parent object is not found
-                                  or if there is an error during the retrieval.
+        Dict[str, ResourceInstance]: A dictionary with the UID of the Parent object as the key
+                                     and the Parent object itself as the value.
+                                     An empty dictionary is returned if the Parent object is not found
+                                     or if there is an error during the retrieval.
     """
 
     owner_ref = next(
@@ -165,8 +186,8 @@ def get_owner_object_from_child(
                 api_version=owner_ref.apiVersion, kind=owner_ref.kind
             )
 
-            # We don't need to limit for a given namespace, because Replica objects may live in other
-            # then Pod namespace, so we may get multiple replica objects for a given name.
+            # We don't need to limit by namespace, because Replica objects may live in a
+            # different namespace than the Pod, so we may get multiple replica objects for a given name.
             # The field_selector does not work on the UID, that's why we need to match separately
             replica_list = api_resource.get(
                 field_selector=f"metadata.name={owner_ref.name}"
@@ -265,10 +286,7 @@ def _parse_container_image_uri(
             Parsed container URI into Tuple of registry URI, image name and SHA256 value.
             If any of the expected values is not found it then returns (None, None, None).
     """
-    pattern = re.compile(
-        r"^(?P<registry>[^/]+/[^/]+/)?(?P<image_name>[^@]+)@(?P<sha256_value>sha256:[a-fA-F0-9]{64})$"
-    )
-    match = pattern.match(image_uri)
+    match = _CONTAINER_IMAGE_URI_RE.match(image_uri)
     if match:
         registry = match.group("registry")
         image_name = match.group("image_name")
@@ -291,8 +309,6 @@ def get_images_from_pod(pod: ResourceField) -> Dict[str, str]:
     running pods and corresponding parent objects.
     """
 
-    # Once we move fully to python 3.10+ we can replace with:
-    # if (containers := replica.spec.template.spec.containers) is not None and containers:
     image_shas = {}
     if pod and pod.status and pod.status.containerStatuses:
         for container_status in pod.status.containerStatuses:

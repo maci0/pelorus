@@ -14,11 +14,14 @@
 #    under the License.
 #
 
+import logging
 import threading
+from collections import deque
 from typing import Dict, Optional, Sequence, Union
 
+from prometheus_client import Gauge
 from prometheus_client.core import GaugeMetricFamily
-from pydantic.main import ModelMetaclass
+from pydantic import BaseModel
 
 from provider_common import format_app_name
 from webhook.models.pelorus_webhook import (
@@ -29,17 +32,43 @@ from webhook.models.pelorus_webhook import (
 )
 
 
+_PELORUS_PAYLOAD = {"app": "app"}
+
+_FAILURE_PAYLOAD = {
+    **_PELORUS_PAYLOAD,
+    "issue_number": "failure_id",
+}
+
+_DEPLOYTIME_PAYLOAD = {
+    **_PELORUS_PAYLOAD,
+    "namespace": "namespace",
+    "image_sha": "image_sha",
+}
+
+_COMMITTIME_PAYLOAD = {
+    **_DEPLOYTIME_PAYLOAD,
+    "commit": "commit_hash",
+}
+
+_CLASS_TO_LABEL_MAP: Dict[type, Dict[str, str]] = {
+    PelorusPayload: _PELORUS_PAYLOAD,
+    FailurePelorusPayload: _FAILURE_PAYLOAD,
+    DeployTimePelorusPayload: _DEPLOYTIME_PAYLOAD,
+    CommitTimePelorusPayload: _COMMITTIME_PAYLOAD,
+}
+
+
 def _pelorus_metric_to_dict(
-    pelorus_model: Union[PelorusPayload, ModelMetaclass]
+    pelorus_model: Union[PelorusPayload, type[BaseModel]]
 ) -> Dict[str, str]:
     """
     Mapping between Pelorus Payload Metrics defined as pydantic classes and the
     Prometheus expected metrics.
 
     Attributes:
-        pelorus_model Union(PelorusPayloadType, ModelMetaclass): imported
+        pelorus_model Union[PelorusPayload, type[BaseModel]]: imported
                         class that is subclass of the PelorusPayload.
-                        This can be either class or it's instance.
+                        This can be either class or its instance.
 
     Returns:
         Dict[str, str]: First item is the Prometheus expected label and second
@@ -48,46 +77,13 @@ def _pelorus_metric_to_dict(
     Raises:
         TypeError: If the prometheus data model is not supported
     """
-    pelorus_payload = {"app": "app"}
+    cls = pelorus_model if isinstance(pelorus_model, type) else type(pelorus_model)
 
-    failure_payload = {
-        **pelorus_payload,
-        "issue_number": "failure_id",
-    }
+    result = _CLASS_TO_LABEL_MAP.get(cls)
+    if result is not None:
+        return result
 
-    deploytime_payload = {
-        **pelorus_payload,
-        "namespace": "namespace",
-        "image_sha": "image_sha",
-    }
-
-    committime_payload = {
-        **deploytime_payload,
-        "commit": "commit_hash",
-    }
-
-    class_model_name_to_dict = {
-        "PelorusPayload": pelorus_payload,
-        "FailurePelorusPayload": failure_payload,
-        "DeployTimePelorusPayload": deploytime_payload,
-        "CommitTimePelorusPayload": committime_payload,
-    }
-
-    # This is to use model name, which equals to the
-    # class name. The __class_ can't be used here as
-    # it's inherited from pydantic.main.ModelMetaclass
-    if hasattr(pelorus_model, "__qualname__"):
-        model_name = pelorus_model.__qualname__
-    else:
-        # It's an instance
-        model_name = pelorus_model.__class__.__qualname__
-
-    pelorus_model_to_prometheus_mapping = class_model_name_to_dict.get(model_name)
-
-    if pelorus_model_to_prometheus_mapping:
-        return pelorus_model_to_prometheus_mapping
-
-    raise TypeError(f"Improper prometheus data model: {model_name}")
+    raise TypeError(f"Improper prometheus data model: {cls.__name__}")
 
 
 def pelorus_metric_to_prometheus(pelorus_model: PelorusPayload) -> list[str]:
@@ -122,10 +118,19 @@ def pelorus_metric_to_prometheus(pelorus_model: PelorusPayload) -> list[str]:
     return data_values
 
 
+_MAX_METRICS = 10_000
+
+_store_utilization = Gauge(
+    "pelorus_webhook_store_utilization",
+    "Number of metrics currently held in the in-memory webhook store",
+    ["metric_family"],
+)
+
+
 class PelorusGaugeMetricFamily(GaugeMetricFamily):
     """
-    Wrapper around GaugeMetricFamily class which allows to async
-    access to it's data when used by different webhook endpoints.
+    Wrapper around GaugeMetricFamily class which allows thread-safe
+    access to its data when used by different webhook endpoints.
     """
 
     def __init__(
@@ -137,40 +142,53 @@ class PelorusGaugeMetricFamily(GaugeMetricFamily):
         unit: str = "",
     ):
         super().__init__(name, documentation, value, labels, unit)
+        self.samples = deque(self.samples)
         self.lock = threading.Lock()
-        self.added_metrics = set()
+        self.added_metrics: Dict[str, None] = {}
 
     def add_metric(self, metric_id, *args, **kwargs):
         with self.lock:
             if metric_id and metric_id not in self.added_metrics:
+                if len(self.added_metrics) >= _MAX_METRICS:
+                    logging.warning(
+                        "In-memory metric store full (%d), dropping oldest entry",
+                        _MAX_METRICS,
+                    )
+                    oldest = next(iter(self.added_metrics))
+                    del self.added_metrics[oldest]
+                    if self.samples:
+                        self.samples.popleft()
                 super().add_metric(*args, **kwargs)
-                self.added_metrics.add(metric_id)
+                self.added_metrics[metric_id] = None
+            _store_utilization.labels(metric_family=self.name).set(
+                len(self.added_metrics)
+            )
 
-    def __iter__(self, *args, **kwargs):
+    def __iter__(self):
         with self.lock:
-            for item in super().__iter__(*args, **kwargs):
-                yield item
+            snapshot = list(super().__iter__())
+        return iter(snapshot)
 
 
 in_memory_commit_metrics = PelorusGaugeMetricFamily(
     "commit_timestamp",
     "Commit timestamp",
-    labels=list(_pelorus_metric_to_dict(CommitTimePelorusPayload).values()),
+    labels=list(_pelorus_metric_to_dict(CommitTimePelorusPayload).keys()),
 )
 
 in_memory_deploy_timestamp_metric = PelorusGaugeMetricFamily(
     "deploy_timestamp",
     "Deployment timestamp",
-    labels=list(_pelorus_metric_to_dict(DeployTimePelorusPayload).values()),
+    labels=list(_pelorus_metric_to_dict(DeployTimePelorusPayload).keys()),
 )
 
 in_memory_failure_creation_metric = PelorusGaugeMetricFamily(
     "failure_creation_timestamp",
     "Failure Creation Timestamp",
-    labels=list(_pelorus_metric_to_dict(FailurePelorusPayload).values()),
+    labels=list(_pelorus_metric_to_dict(FailurePelorusPayload).keys()),
 )
 in_memory_failure_resolution_metric = PelorusGaugeMetricFamily(
     "failure_resolution_timestamp",
     "Failure Resolution Timestamp",
-    labels=list(_pelorus_metric_to_dict(FailurePelorusPayload).values()),
+    labels=list(_pelorus_metric_to_dict(FailurePelorusPayload).keys()),
 )

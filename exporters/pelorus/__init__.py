@@ -40,34 +40,37 @@ def _print_version():
         utils.get_env_var(f"OPENSHIFT_BUILD_{var}") for var in ["SOURCE", "REFERENCE"]
     )
     if repo and ref:
-        print(f"Running {exporter_name} exporter from repo {repo} ref {ref}")
+        logging.info("Running %s exporter from repo %s ref %s", exporter_name, repo, ref)
     else:
         image_tag = utils.get_env_var("PELORUS_IMAGE_TAG")
         if image_tag:
-            print(f"Running {exporter_name} exporter from the image: {image_tag}.")
+            logging.info("Running %s exporter from the image: %s.", exporter_name, image_tag)
         else:
-            print(f"Running {exporter_name} exporter. No version information found.")
+            logging.info("Running %s exporter. No version information found.", exporter_name)
 
 
 # region: logging setup
+_VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+
 def setup_logging(prod: bool = True):
-    _print_version()
     loglevel = utils.get_env_var("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper()
-    numeric_level = getattr(logging, loglevel, None)
-    if not isinstance(numeric_level, int):
-        raise ValueError("Invalid log level: %s", loglevel)
+    if loglevel not in _VALID_LOG_LEVELS:
+        raise ValueError(f"Invalid log level: {loglevel}")
+    numeric_level = getattr(logging, loglevel)
     root_logger = logging.getLogger()
     formatter = utils.SpecializeDebugFormatter(
         fmt=DEFAULT_LOG_FORMAT, datefmt=DEFAULT_LOG_DATE_FORMAT
     )
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
-    # committime : containerimage threading.Thread().start() adds handler
+    # Clear existing handlers in prod to avoid duplicates from background threads
     if prod and root_logger.hasHandlers():
         root_logger.handlers = []
     root_logger.addHandler(handler)
     root_logger.setLevel(numeric_level)
-    print(f"Initializing Logger with LogLevel: {loglevel}")
+    logging.info("Initializing Logger with LogLevel: %s", loglevel)
+    _print_version()
 
 
 # endregion
@@ -77,7 +80,7 @@ def setup_logging(prod: bool = True):
 NamespaceSpec = Optional[Sequence[str]]
 
 
-def url_joiner(base: str, *parts: str):
+def url_joiner(base: str, *parts: str) -> str:
     """
     Joins each part together (including the base url) with a slash, stripping any leading or trailing slashes.
     Used for "normalizing" URLs to handle most use cases.

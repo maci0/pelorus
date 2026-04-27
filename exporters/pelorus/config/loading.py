@@ -113,7 +113,7 @@ class ValueWithSource:
     log: Log = attrs.field(kw_only=True)
 
     def source(self) -> str:
-        ...
+        raise NotImplementedError
 
 
 @frozen
@@ -128,7 +128,7 @@ class FoundEnvVar(ValueWithSource):
 @frozen
 class UnsetEnvVar(ValueWithSource):
     "No env var, came from attrs"
-    env_lookups: tuple[str]
+    env_lookups: tuple[str, ...]
 
     def source(self):
         if len(self.env_lookups) == 1:
@@ -163,7 +163,7 @@ class _EnvFinder:
     "Load from environment or get default"
     field: Attribute
     env: Mapping[str, str]
-    env_lookups: tuple[str]
+    env_lookups: tuple[str, ...]
     default_keyword: str
     other: Mapping[str, Any]
 

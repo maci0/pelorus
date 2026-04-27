@@ -120,7 +120,7 @@ class _LoggingLoader(Generic[ConfigClass]):
 
 def load_and_log(
     cls: Type[ConfigClass],
-    other: dict[str, Any] = {},
+    other: Optional[dict[str, Any]] = None,
     *,
     env: Mapping[str, str] = os.environ,
     default_keyword: Optional[str] = None,
@@ -142,6 +142,9 @@ def load_and_log(
 
     logger defaults to the logger for `pelorus.config`, but may be overridden.
     """
+    if other is None:
+        other = {}
+
     if default_keyword is None:
         default = env.get("PELORUS_DEFAULT_KEYWORD", DEFAULT_VAR_KEYWORD)
     else:

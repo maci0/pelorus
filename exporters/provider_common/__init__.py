@@ -1,3 +1,5 @@
+__all__ = ["format_app_name", "APP_NAME_SEPARATOR"]
+
 APP_NAME_SEPARATOR = "/"
 
 

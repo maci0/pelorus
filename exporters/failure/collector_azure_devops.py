@@ -14,13 +14,13 @@
 #
 
 import logging
-from typing import List
+import re
 
 from attrs import converters, define, field
 from azure.devops.connection import Connection
 from azure.devops.exceptions import AzureDevOpsServiceError
-from azure.devops.v6_0.work_item_tracking.models import Wiql, WorkItem
-from azure.devops.v6_0.work_item_tracking.work_item_tracking_client import (
+from azure.devops.v7_1.work_item_tracking.models import Wiql, WorkItem
+from azure.devops.v7_1.work_item_tracking.work_item_tracking_client import (
     WorkItemTrackingClient,
 )
 from msrest.authentication import BasicAuthentication
@@ -29,9 +29,11 @@ from failure.collector_base import AbstractFailureCollector, TrackerIssue
 from pelorus.config import env_var_names, env_vars
 from pelorus.config.converters import comma_or_whitespace_separated, pass_through
 from pelorus.config.log import REDACT, log
-from pelorus.errors import FailureProviderAuthenticationError
+from failure.collector_base import FailureProviderAuthenticationError
 from pelorus.timeutil import parse_assuming_utc_with_fallback, second_precision
 from pelorus.utils import Url
+
+_SAFE_WIQL_VALUE = re.compile(r"^[A-Za-z0-9_ .-]+$")
 
 _DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 _DATETIME_FORMAT_FALLBACK = "%Y-%m-%dT%H:%M:%SZ"
@@ -74,16 +76,16 @@ class AzureDevOpsFailureCollector(AbstractFailureCollector):
             credentials = BasicAuthentication("", self.token)
             connection = Connection(base_url=self.tracker_api.url, creds=credentials)
             self.client: WorkItemTrackingClient = (
-                connection.clients_v6_0.get_work_item_tracking_client()
+                connection.clients_v7_0.get_work_item_tracking_client()
             )
         except AzureDevOpsServiceError as error:
             if error.type_key == "UnauthorizedRequestException":
                 logging.error(FailureProviderAuthenticationError.auth_message)
                 raise FailureProviderAuthenticationError from error
-            logging.error(error.message)
+            logging.error(error.message, exc_info=True)
             raise error
 
-    def get_work_items(self) -> List[WorkItem]:
+    def get_work_items(self) -> list[WorkItem]:
         logging.debug("Collecting work items")
 
         try:
@@ -91,9 +93,15 @@ class AzureDevOpsFailureCollector(AbstractFailureCollector):
             if self.work_item_type or self.work_item_priority:
                 query_filters = []
                 if self.work_item_type:
+                    for v in self.work_item_type:
+                        if not _SAFE_WIQL_VALUE.match(v):
+                            raise ValueError(f"Invalid work item type: {v!r}")
                     query_type = "', '".join(self.work_item_type)
                     query_filters.append(f"[System.WorkItemType] In ('{query_type}')")
                 if self.work_item_priority:
+                    for v in self.work_item_priority:
+                        if not _SAFE_WIQL_VALUE.match(v):
+                            raise ValueError(f"Invalid work item priority: {v!r}")
                     query_priority = "', '".join(self.work_item_priority)
                     query_filters.append(
                         f"[Microsoft.VSTS.Common.Priority] In ('{query_priority}')"
@@ -127,10 +135,10 @@ class AzureDevOpsFailureCollector(AbstractFailureCollector):
             if error.type_key == "UnauthorizedRequestException":
                 logging.error(FailureProviderAuthenticationError.auth_message)
                 raise FailureProviderAuthenticationError from error
-            logging.error(error.message)
+            logging.error(error.message, exc_info=True)
             raise error
         except Exception as error:
-            logging.error(error)  # pragma: no cover
+            logging.error(error, exc_info=True)  # pragma: no cover
             raise  # pragma: no cover
 
     def filter_by_project(self, project: str) -> bool:
@@ -150,6 +158,10 @@ class AzureDevOpsFailureCollector(AbstractFailureCollector):
                     return label.replace(label_text, "")
             return "unknown"
         except KeyError:
+            logging.debug(
+                "Work item %s has no 'System.Tags' field, returning 'unknown' app name",
+                work_item.id,
+            )
             return "unknown"
 
     def search_issues(self) -> list[TrackerIssue]:
@@ -177,19 +189,17 @@ class AzureDevOpsFailureCollector(AbstractFailureCollector):
                     resolution_ts = second_precision(resolution_tz).timestamp()
 
                     logging.debug(
-                        "Found production incident closed: {}, {}: {}".format(
-                            resolved_at,
-                            work_item_id,
-                            title,
-                        )
+                        "Found production incident closed: %s, %s: %s",
+                        resolved_at,
+                        work_item_id,
+                        title,
                     )
                 except KeyError:
                     logging.debug(
-                        "Found production incident opened: {}, {}: {}".format(
-                            created_at,
-                            work_item_id,
-                            title,
-                        )
+                        "Found production incident opened: %s, %s: %s",
+                        created_at,
+                        work_item_id,
+                        title,
                     )
                     resolution_ts = None
 
@@ -201,6 +211,5 @@ class AzureDevOpsFailureCollector(AbstractFailureCollector):
                 )
                 production_work_items.append(tracker_issue)
         if not production_work_items:
-            # TODO should be warning?
             logging.debug("No issues were found")
         return production_work_items

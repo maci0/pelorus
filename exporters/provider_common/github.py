@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 from urllib.error import HTTPError
+from urllib.parse import urlparse
 
 import requests
 from attrs import frozen
@@ -106,7 +107,7 @@ def _validate_github_response(response: requests.Response) -> list:
     response.raise_for_status()
     json = response.json()
     if not isinstance(json, list):
-        raise ValueError(f"Returned json was not a list: {json}")
+        raise ValueError(f"Returned json was not a list, was {type(json).__name__}")
 
     return json
 
@@ -116,8 +117,23 @@ class GitHubPageResponse:
     items: list
     response: requests.Response
 
-    def __iter__(self) -> Iterator[list]:
+    def __iter__(self) -> Iterator[Any]:
         return iter(self.items)
+
+
+def _validate_same_origin(start_url: str, next_url: str) -> None:
+    """Verify that a pagination URL stays on the same origin as the initial request.
+
+    Prevents SSRF if a compromised API response injects a malicious ``next`` link
+    that would redirect the authenticated session to an internal service.
+    """
+    start = urlparse(start_url)
+    target = urlparse(next_url)
+    if (start.scheme, start.hostname, start.port) != (target.scheme, target.hostname, target.port):
+        raise ValueError(
+            f"Pagination URL origin mismatch: expected {start.scheme}://{start.hostname}, "
+            f"got {target.scheme}://{target.hostname}"
+        )
 
 
 def paginate_github_with_page(
@@ -130,13 +146,13 @@ def paginate_github_with_page(
     Yields lists and the response they came from. This is solely so you can inspect the response.
     For higher-level usage, use `paginate_github`, which flattens each item in each list for you.
 
-    Will return a GitHubError with any of the following set to the __cause__ if they occur:
+    Will raise a GitHubError with any of the following set to the __cause__ if they occur:
     HTTPError if there's a bad response
     JSONDecodeError if there's a response with invalid JSON
     ValueError if a response was valid json but wasn't a list
     BadAttributePathError if a response was missing a `next` link or the first was missing a `last` link.
     """
-    response = session.get(start_url)
+    response = session.get(start_url, timeout=30)
     try:
         json = _validate_github_response(response)
 
@@ -156,7 +172,8 @@ def paginate_github_with_page(
                 break
 
             url = get_nested(response.links, "next.url")
-            response = session.get(url)
+            _validate_same_origin(start_url, url)
+            response = session.get(url, timeout=30)
             json = _validate_github_response(response)
     except (
         HTTPError,
@@ -175,7 +192,7 @@ def paginate_github(session: requests.Session, start_url: str) -> Iterable:
     Will yield each item in each response list, automatically requesting
     subsequent pages as necessary.
 
-    Will return a GitHubError with any of the following set to the __cause__ if they occur:
+    Will raise a GitHubError with any of the following set to the __cause__ if they occur:
     HTTPError if there's a bad response
     JSONDecodeError if there's a response with invalid JSON
     ValueError if a response was valid json but wasn't a list

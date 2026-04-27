@@ -3,13 +3,14 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Optional, cast
 
+import giturlparse
 import requests
 import requests.exceptions
 from attrs import define, field
 
 import pelorus
 from committime import CommitMetric
-from committime.collector_base import AbstractCommitCollector, UnsupportedGITProvider
+from committime.collector_base import AbstractCommitCollector, check_provider_support
 from pelorus.timeutil import parse_tz_aware
 from pelorus.utils import set_up_requests_session
 
@@ -50,21 +51,12 @@ class Version1(APIVersion):
         git_server = metric.git_server
         sha = metric.commit_hash
 
-        # URL munging copied from original code.
-        # TODO: this is messy. We should investigate the parsing that CommitMetric is doing.
-
-        # Due to the BB V1 git pattern differences, need remove '/scm' and parse again.
-        old_url = metric.repo_url
-        # Parse out the V1 /scm, for whatever reason why it is present.
-        new_url = old_url.replace("/scm", "")
-        # set the new url, so the parsing will happen
-        metric.repo_url = new_url
-        # set the new project name
-        project_name = metric.repo_project
-        # set the new group
-        group = metric.repo_group
-        # set the URL back to the original
-        metric.repo_url = old_url
+        # Extract project/group by parsing the URL with '/scm' removed,
+        # without mutating metric.repo_url (which triggers expensive re-parsing).
+        url_without_scm = metric.repo_url.replace("/scm", "")
+        parsed = giturlparse.parse(url_without_scm)
+        project_name = parsed.name
+        group = parsed.owner
 
         return pelorus.url_joiner(
             git_server,
@@ -76,7 +68,7 @@ class Version1(APIVersion):
         # API V1 uses unix time
         commit_timestamp = api_response["committerTimestamp"]
 
-        # Convert timestamp from miliseconds to seconds
+        # Convert timestamp from milliseconds to seconds
         converted_timestamp = commit_timestamp / 1000
 
         timestamp = datetime.fromtimestamp(converted_timestamp, tz=timezone.utc)
@@ -87,12 +79,8 @@ class Version1(APIVersion):
             timestamp,
             converted_timestamp,
         )
-        # set the timestamp in the metric
         metric.commit_timestamp = converted_timestamp
-
-        # convert the time stamp to datetime and set in metric
         metric.commit_time = timestamp.isoformat()
-        # since the v1 api is deprecated, just set link to unknown
         metric.commit_link = "unknown"
 
 
@@ -118,7 +106,6 @@ class Version2(APIVersion):
         )
 
     def update_metric_from_api(self, metric: CommitMetric, api_response: dict):
-        # API V2 has a human-readable time, which needs to be parsed.
         commit_time = api_response["date"]
         timestamp = parse_tz_aware(commit_time, _DATETIME_FORMAT)
         commit_link = api_response["links"]["html"]
@@ -129,9 +116,7 @@ class Version2(APIVersion):
             timestamp,
             commit_time,
         )
-        # set the commit time from the API
         metric.commit_time = commit_time
-        # set the timestamp after conversion
         metric.commit_timestamp = timestamp.timestamp()
         metric.commit_link = commit_link
 
@@ -160,16 +145,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
     def get_commit_time(self, metric: CommitMetric):
         git_server = metric.git_server
 
-        # do a simple check for hosted Git services.
-        if (
-            "github" in git_server
-            or "gitea" in git_server
-            or "gitlab" in git_server
-            or "azure" in git_server
-        ):
-            raise UnsupportedGITProvider(
-                "Skipping non BitBucket server, found %s" % (git_server)
-            )
+        check_provider_support(git_server, "bitbucket")
 
         try:
             api_version = self.get_api_version(git_server)
@@ -179,17 +155,17 @@ class BitbucketCommitCollector(AbstractCommitCollector):
             api_dict = self.get_commit_information(api_version, metric)
 
             if api_dict is None:
-                return None
+                return metric
 
             api_version.update_metric_from_api(metric, api_dict)
 
             return metric
-        except requests.exceptions.SSLError as e:
+        except requests.exceptions.SSLError:
             logging.error(
-                "TLS error talking to %s for build %s: %s",
+                "TLS error talking to %s for build %s",
                 git_server,
                 metric.build_name,
-                e,
+                exc_info=True,
             )
         except Exception:
             logging.error(
@@ -221,7 +197,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
         try:
             url = api_version.commit_url(metric)
 
-            response = self.session.get(url)
+            response = self.session.get(url, timeout=30)
             response.encoding = "utf-8"
             response.raise_for_status()
 
@@ -233,14 +209,14 @@ class BitbucketCommitCollector(AbstractCommitCollector):
             logging.debug(
                 (
                     "For project %(project)s, repo %(repo)s, build %(build)s, "
-                    "commit %(commit)s BitBucket returned %(response)s"
+                    "commit %(commit)s BitBucket returned status %(status)s"
                 ),
                 dict(
                     project=metric.repo_name,
                     repo=metric.repo_url,
                     build=metric.build_name,
                     commit=metric.commit_hash,
-                    response=response.text,
+                    status=response.status_code,
                 ),
             )
 
@@ -258,6 +234,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
                     commit=metric.commit_hash,
                     http_err=e,
                 ),
+                exc_info=True,
             )
         except requests.exceptions.JSONDecodeError as e:
             logging.error(
@@ -272,6 +249,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
                     commit=metric.commit_hash,
                     json_err=e,
                 ),
+                exc_info=True,
             )
         return api_response
 
@@ -287,7 +265,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
             return api_version
 
         for potential_api_version in _SUPPORTED_API_VERSIONS:
-            if self.check_api_verison(server, potential_api_version):
+            if self.check_api_version(server, potential_api_version):
                 api_version = potential_api_version
                 self.cached_server_api_versions[server] = potential_api_version
                 break
@@ -297,7 +275,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
 
         return api_version
 
-    def check_api_verison(self, git_server: str, api_version: APIVersion) -> bool:
+    def check_api_version(self, git_server: str, api_version: APIVersion) -> bool:
         """
         Check if the git_server supports a given ApiVersion.
         Will return True if so, False if there's some non-successful response.
@@ -305,7 +283,7 @@ class BitbucketCommitCollector(AbstractCommitCollector):
         """
         url = api_version.test_url(git_server)
 
-        response = self.session.get(url)
+        response = self.session.get(url, timeout=30)
         try:
             response.raise_for_status()
             return True

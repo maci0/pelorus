@@ -76,7 +76,7 @@ def get_nested(
     """
     `get_nested` helps you safely traverse a deeply nested object that is indexable.
     If `TypeError`, `KeyError`, or `IndexError` are thrown, then `default` will be returned.
-    If `default` is not given, a `MissingAttributeError` will be thrown,
+    If `default` is not given, a `BadAttributePathError` will be raised,
     which includes information about where in the path things went wrong, and a human-readable name (if included).
 
     You may specify the path as either a list of keys, or a single string.
@@ -86,7 +86,7 @@ def get_nested(
     A `name` for the item, if specified, makes the error message in the exception more useful.
 
     Kubernetes API items often are deeply nested, with any number of fields that could be absent.
-    When using an `openshift.dynamic.ResourceField`, it will turn attribute accesses into
+    When using a `kubernetes.dynamic.resource.ResourceField`, it will turn attribute accesses into
     dictionary accesses. Normally, a deeply nested access like item.status.ref.foo.bar has four different spots
     you could get an `AttributeError`. With a `ResourceField`, there are actually only three, since `item.status`
     will return `None` if `status` is absent, but `None` will not have a `ref` field, leading to an
@@ -133,13 +133,17 @@ def format_path(path: Sequence[str]) -> str:
 
     >>> assert format_path("foo.bar".split(".")) == "foo.bar"
     >>> assert format_path(["foo", "has.dots", "bar"]) == "foo[has.dots].bar"
+    >>> assert format_path([]) == ""
     """
-    formatted = ""
+    if not path:
+        return ""
+    parts = []
     for part in path:
         if "." in part:
-            formatted += f"[{part}]"
+            parts.append(f"[{part}]")
         else:
-            formatted += f".{part}"
+            parts.append(f".{part}")
+    formatted = "".join(parts)
     return formatted if formatted[0] != "." else formatted[1:]
 
 
@@ -192,4 +196,4 @@ def collect_bad_attribute_path_error(error_list: list, append: bool = True):
             error_list.append(e)
 
 
-__all__ = ["get_nested", "BadAttributePathError", "collect_bad_attribute_path_error"]
+__all__ = ["get_nested", "BadAttributePathError", "collect_bad_attribute_path_error", "format_path", "split_path"]

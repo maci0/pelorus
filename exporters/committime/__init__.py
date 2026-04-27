@@ -32,9 +32,29 @@ GIT_PROVIDER_TYPES = {"github", "bitbucket", "gitea", "azure-devops", "gitlab"}
 
 SUPPORTED_PROTOCOLS = {"http", "https", "ssh", "git"}
 
+# Pre-compiled regexes for Azure DevOps repo URL parsing
+_AZURE_HTTP_RE = re.compile(
+    r"^(?P<protocol>https?)\://"
+    r"((?P<user>[a-zA-Z0-9_-]+)@)?"
+    r"(?P<resource>[a-z0-9_.-]*)"
+    r"[:/]*"
+    r"(?P<port>[\d]+){0,1}"
+    r"(?P<pathname>\/"
+    r"(?P<owner>[\w\-\.]+)\/"
+    r"(?P<azure_project>[\w\-\.]+)\/\_git\/"
+    r"(?P<name>[\w\-\.]+)\/?)$"
+)
+_AZURE_SSH_RE = re.compile(
+    r"^git@(?P<resource>"
+    r"(?P<protocol>\w+)\.[a-z0-9_.-]*\:v3)"
+    r"[:/]*"
+    r"(?P<port>[\d]+){0,1}"
+    r"(?P<pathname>\/"
+    r"(?P<owner>[\w\-\.]+)\/"
+    r"(?P<azure_project>[\w\-\.]+)\/"
+    r"(?P<name>[\w\-\.]+)\/?)$"
+)
 
-# TODO: the majority of these fields are unused.
-# Let's figure out why they're there.
 @attr.define
 class CommitMetric:
     name: str = attr.field()
@@ -54,15 +74,9 @@ class CommitMetric:
     committer: Optional[str] = attr.field(default=None, kw_only=True)
     commit_hash: Optional[str] = attr.field(default=None, kw_only=True)
     commit_time: Optional[str] = attr.field(default=None, kw_only=True)
-    """
-    A human-readable timestamp.
-    In the future, this and commit_timestamp should be combined.
-    """
+    """A human-readable timestamp."""
     commit_timestamp: Optional[float] = attr.field(default=None, kw_only=True)
-    """
-    The unix timestamp.
-    In the future, this and commit_time should be combined.
-    """
+    """The unix timestamp."""
     commit_link: Optional[str] = attr.field(default=None, kw_only=True)
 
     build_name: Optional[str] = attr.field(default=None, kw_only=True)
@@ -78,11 +92,10 @@ class CommitMetric:
         """
         The full URL for the repo, obtained from build metadata, Image annotations, etc.
 
-        Setting this will parse it and enable using the following fields:
+        Setting this will parse it and populate the following properties:
 
-        repo_{protocol,group,name,project}
-
-        git_{server,fqdn}
+        repo_protocol, repo_group, repo_name, repo_project,
+        repo_port, azure_project, git_server, git_fqdn
         """
         return self.__repo_url
 
@@ -109,12 +122,10 @@ class CommitMetric:
 
     @property
     def repo_name(self):
-        """Returns the Git repo name, example: myrepo.git"""
         return self.__repo_name
 
     @property
     def repo_project(self):
-        """Returns the Git project name, this is normally the repo_name with '.git' parsed off the end."""
         return self.__repo_project
 
     @property
@@ -137,30 +148,9 @@ class CommitMetric:
         if self.__repo_url is None:
             return
         # http://user@dev.azure.com:8080/organization/project/_git/repository/
-        regex = re.compile(
-            r"^(?P<protocol>https?)\://"
-            r"((?P<user>[a-zA-Z0-9_-]+)@)?"
-            r"(?P<resource>[a-z0-9_.-]*)"
-            r"[:/]*"
-            r"(?P<port>[\d]+){0,1}"
-            r"(?P<pathname>\/"
-            r"(?P<owner>[\w\-\.]+)\/"
-            r"(?P<azure_project>[\w\-\.]+)\/\_git\/"
-            r"(?P<name>[\w\-\.]+)\/?)$"
-        )
-        match = regex.search(self.__repo_url)
+        match = _AZURE_HTTP_RE.search(self.__repo_url)
         # git@ssh.dev.azure.com:v3/organization/project/repository/
-        regex_ssh = re.compile(
-            r"^git@(?P<resource>"
-            r"(?P<protocol>\w+)\.[a-z0-9_.-]*\:v3)"
-            r"[:/]*"
-            r"(?P<port>[\d]+){0,1}"
-            r"(?P<pathname>\/"
-            r"(?P<owner>[\w\-\.]+)\/"
-            r"(?P<azure_project>[\w\-\.]+)\/"
-            r"(?P<name>[\w\-\.]+)\/?)$"
-        )
-        match_ssh = regex_ssh.search(self.__repo_url)
+        match_ssh = _AZURE_SSH_RE.search(self.__repo_url)
         if match_ssh:
             match = match_ssh
         if match:
@@ -197,11 +187,11 @@ class CommitMetric:
     # missing attributes or with False argument are handled specially:
     #
     # name: set when the object is constructed
-    # labels: must be converted from an `openshift.dynamic.ResourceField`
+    # labels: must be converted from a `kubernetes.dynamic.resource.ResourceField`
     # repo_url: if it's not present in the Build, fallback logic needs to be handled elsewhere
     # commit_hash: if it's missing in the Build, fallback logic needs to be handled elsewhere
     # commit_timestamp: very special handling, the main purpose of each committime collector
-    # comitter: not required to calculate committime
+    # committer: not required to calculate committime
     _BUILD_MAPPING = dict(
         build_name=("metadata.name", True),
         build_config_name=("metadata.labels.buildconfig", True),
@@ -213,7 +203,7 @@ class CommitMetric:
         committer=("spec.revision.git.author.name", False),
     )
 
-    _ANNOTATION_MAPPIG = dict(
+    _ANNOTATION_MAPPING = dict(
         repo_url="io.openshift.build.source-location",
         commit_hash="io.openshift.build.commit.id",
         commit_time="io.openshift.build.commit.date",

@@ -14,7 +14,7 @@
 #
 
 import logging
-from typing import Dict, Optional
+from typing import Optional
 
 import requests
 from attrs import define, field
@@ -23,7 +23,7 @@ from failure.collector_base import AbstractFailureCollector, TrackerIssue
 from pelorus.config import env_var_names, env_vars
 from pelorus.config.converters import comma_or_whitespace_separated
 from pelorus.config.log import REDACT, log
-from pelorus.errors import FailureProviderAuthenticationError
+from failure.collector_base import FailureProviderAuthenticationError
 from pelorus.timeutil import parse_assuming_utc, second_precision
 from pelorus.utils import TokenAuth, set_up_requests_session
 
@@ -31,7 +31,7 @@ _DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 @define(kw_only=True)
-class PagerdutyFailureCollector(AbstractFailureCollector):
+class PagerDutyFailureCollector(AbstractFailureCollector):
     """
     PagerDuty implementation of a FailureCollector
     """
@@ -58,7 +58,8 @@ class PagerdutyFailureCollector(AbstractFailureCollector):
         metadata=env_vars("PAGERDUTY_PRIORITY"),
     )
 
-    url = "https://api.pagerduty.com/incidents?date_range=all&limit=10000"
+    _BASE_URL = "https://api.pagerduty.com/incidents"
+    _PAGE_LIMIT = 100
     headers = {"Accept": "application/vnd.pagerduty+json;version=2"}
 
     def __attrs_post_init__(self):
@@ -75,31 +76,48 @@ class PagerdutyFailureCollector(AbstractFailureCollector):
     def get_incidents(self) -> list[dict]:
         logging.debug("Collecting incidents")
 
-        resp = self.session.get(self.url, headers=self.headers)
-        try:
-            resp.raise_for_status()
-            # TODO too much noise?
-            logging.debug("PagerDuty successfully returned %s", resp.text)
-            return resp.json()["incidents"]
-        except requests.HTTPError as error:
-            if resp.status_code == requests.codes.unauthorized:
-                logging.error(FailureProviderAuthenticationError.auth_message)
-                raise FailureProviderAuthenticationError from error
-            logging.error(error)  # pragma: no cover
-            raise  # pragma: no cover
+        all_incidents = []
+        offset = 0
+
+        while True:
+            url = f"{self._BASE_URL}?date_range=all&limit={self._PAGE_LIMIT}&offset={offset}"
+            resp = self.session.get(url, headers=self.headers, timeout=30)
+            try:
+                resp.raise_for_status()
+                data = resp.json()
+                incidents = data["incidents"]
+                all_incidents.extend(incidents)
+                logging.debug(
+                    "PagerDuty returned %d incidents (offset=%d, more=%s)",
+                    len(incidents),
+                    offset,
+                    data.get("more", False),
+                )
+                if not data.get("more", False):
+                    break
+                offset += self._PAGE_LIMIT
+            except requests.HTTPError as error:
+                if resp.status_code == requests.codes.unauthorized:
+                    logging.error(FailureProviderAuthenticationError.auth_message)
+                    raise FailureProviderAuthenticationError from error
+                logging.error(error, exc_info=True)  # pragma: no cover
+                raise  # pragma: no cover
+
+        return all_incidents
 
     def filter_by_urgency(self, urgency: str) -> bool:
         if not self.incident_urgency:
             return True
         return urgency in self.incident_urgency
 
-    def filter_by_priority(self, priority: Optional[Dict[str, str]]) -> bool:
+    def filter_by_priority(self, priority: Optional[dict[str, str]]) -> bool:
         if not self.incident_priority:
             return True
         try:
             return priority["summary"] in self.incident_priority
         except TypeError:
             # Incidents without priority come as None, instead of dict
+            logging.debug("Incident priority is None, checking if 'null' is in configured priorities")
             return "null" in self.incident_priority
 
     def search_issues(self) -> list[TrackerIssue]:
@@ -127,19 +145,17 @@ class PagerdutyFailureCollector(AbstractFailureCollector):
 
                 if resolution_ts > created_ts:
                     logging.debug(
-                        "Found production incident closed: {}, {}: {}".format(
-                            resolved_at,
-                            incident_id,
-                            title,
-                        )
+                        "Found production incident closed: %s, %s: %s",
+                        resolved_at,
+                        incident_id,
+                        title,
                     )
                 else:
                     logging.debug(
-                        "Found production incident opened: {}, {}: {}".format(
-                            created_at,
-                            incident_id,
-                            title,
-                        )
+                        "Found production incident opened: %s, %s: %s",
+                        created_at,
+                        incident_id,
+                        title,
                     )
                     resolution_ts = None
 
@@ -148,16 +164,8 @@ class PagerdutyFailureCollector(AbstractFailureCollector):
                     created_ts,
                     resolution_ts,
                     incident["service"]["summary"],
-                    # TODO another thing I thought: we could filter services
-                    # (did not think about a good use case for this) or have a
-                    # map like user inputs pairs of key values, like
-                    #    key1=value1,key2=value2
-                    # and then pelorus will put the app here as the value. Ex.:
-                    # the service is named "Incidents of production" but the app
-                    # is called "todolist", then we could map the incidents to the right app
                 )
                 production_incidents.append(tracker_issue)
         if not production_incidents:
-            # TODO should be warning?
             logging.debug("No issues were found")
         return production_incidents

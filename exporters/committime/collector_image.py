@@ -31,7 +31,7 @@ from .collector_base import AbstractCommitCollector
 class ImageCommitCollector(AbstractCommitCollector):
     date_format: str
 
-    date_annotation_name: str = CommitMetric._ANNOTATION_MAPPIG["commit_time"]
+    date_annotation_name: str = CommitMetric._ANNOTATION_MAPPING["commit_time"]
 
     # maps attributes to their location in a `image.openshift.io/v1`.
     # Similar to Build Mapping from committime.__init__.py
@@ -122,8 +122,11 @@ class ImageCommitCollector(AbstractCommitCollector):
                 metric.commit_timestamp = to_epoch_from_string(
                     metric.commit_time
                 ).timestamp()
-            except (ValueError, AttributeError):
-                # Do nothing here as we tried with EPOCH timestamp
+            except (ValueError, AttributeError) as e:
+                logging.debug(
+                    "Primary timestamp parse failed for image %s: %s, trying fallback",
+                    metric.image_hash, e,
+                )
                 metric.commit_timestamp = parse_guessing_timezone_DYNAMIC(
                     metric.commit_time, format=self.date_format
                 ).timestamp()
@@ -150,13 +153,12 @@ class ImageCommitCollector(AbstractCommitCollector):
                 )
         return metric
 
-    # overrides collector_base.generate_metric()
+    # overrides collector_base.generate_metrics()
     def generate_metrics(self) -> Iterable[CommitMetric]:
-        # Initialize metrics list
         metrics = []
         app_label = self.app_label
 
-        logging.debug("Searching for images with label: %s" % app_label)
+        logging.debug("Searching for images with label: %s", app_label)
 
         v1_images = self.kube_client.resources.get(
             api_version="image.openshift.io/v1", kind="Image"
@@ -183,7 +185,9 @@ class ImageCommitCollector(AbstractCommitCollector):
                     metric = self.commit_metric_from_image(app, image, errors)
                 except Exception:
                     logging.error(
-                        "Cannot collect metrics from image: %s" % (image.metadata.name)
+                        "Cannot collect metrics from image: %s",
+                        image.metadata.name,
+                        exc_info=True,
                     )
                     raise
 
@@ -196,7 +200,7 @@ class ImageCommitCollector(AbstractCommitCollector):
                     logging.warning(msg)
                     continue
 
-                logging.debug("Adding metric for app %s" % app)
+                logging.debug("Adding metric for app %s", app)
                 metrics.append(metric)
 
         return metrics

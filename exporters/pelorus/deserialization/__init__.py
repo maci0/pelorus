@@ -25,7 +25,7 @@ be converted to S.
 
 | structured            | unstructured        |
 |-----------------------|---------------------|
-| attrs class¹          | Mapping[str], Any]¹ |
+| attrs class¹          | Mapping[str, Any]¹  |
 | list[S]               | Iterable[U]         |
 | dict[str, S]          | Mapping[str, U]     |
 | Any                   | Any                 |
@@ -56,6 +56,7 @@ See `README.md` in this directory.
 from __future__ import annotations
 
 import typing
+import functools
 from typing import (
     Any,
     Iterable,
@@ -138,7 +139,7 @@ def _type_has_getitem(type_: type) -> bool:
 
 def _is_attrs_class(cls: type) -> TypeGuard[type["attr.AttrsInstance"]]:
     """
-    Return the class if it is an attrs class, else None.
+    Return True if it is an attrs class, else False.
 
     This exists because `attrs.has` is not a proper TypeGuard.
     """
@@ -156,17 +157,20 @@ class Field(NamedTuple):
     metadata: dict[Any, Any]
 
 
-def _fields(cls: type["attr.AttrsInstance"]) -> Iterable[Field]:
+@functools.lru_cache(maxsize=None)
+def _fields(cls: type["attr.AttrsInstance"]) -> tuple[Field, ...]:
     "Get all field information for this attrs class."
     hints = get_type_hints(cls)
     attrs_fields = attrs.fields(cls)
-    for field in attrs_fields:
-        yield Field(
+    return tuple(
+        Field(
             field.name,
             hints[field.name],
             default=field.default,
             metadata=field.metadata,
         )
+        for field in attrs_fields
+    )
 
 
 # endregion
@@ -227,11 +231,7 @@ def _extract_optional_type(type_: type) -> Optional[type]:
     >>> assert _extract_optional_type(Optional[int]) == int
     >>> assert _extract_optional_type(int) is None
     """
-    # this is weird because Optional is just an alias for Union,
-    # where the other entry is NoneType.
-    # and in 3.10, unions with `Type1 | Type2` are a different type!
-    # we'll have to handle that when adding 3.10 support.
-
+    # Optional is just an alias for Union[T, None].
     # it's unclear if order is guaranteed so we have to check both.
     if typing.get_origin(type_) is not typing.Union:
         return None
@@ -326,19 +326,10 @@ class _Deserializer:
         if (optional_alt := _extract_optional_type(target_type)) is not None:
             return self._deserialize_optional(src, optional_alt)
 
-        if issubclass(target_type, PRIMITIVE_TYPES):
-            return self._deserialize_primitive(src, target_type)
-
-        if attrs.has(target_type):
-            if _type_has_getitem(type(src)):
-                # assuming it has str key types.
-                return self._deserialize_attrs_class(src, target_type)
-            else:
-                raise TypeCheckError("Mapping", src)
-
+        # Check for generic aliases (e.g. dict[str, str], list[int]) before
+        # issubclass, since GenericAlias is not a class in Python 3.12+.
         if (dict_types := _extract_dict_types(target_type)) is not None:
             if _type_has_getitem(type(src)):
-                # assuming it has str key types.
                 return self._deserialize_dict(src, dict_types[1])
             else:
                 raise TypeCheckError("Mapping", src)
@@ -349,7 +340,16 @@ class _Deserializer:
             else:
                 raise TypeCheckError(Iterable, src)
 
-        raise TypeError(f"Unsupported type for deserialization: {target_type.__name__}")
+        if isinstance(target_type, type) and issubclass(target_type, PRIMITIVE_TYPES):
+            return self._deserialize_primitive(src, target_type)
+
+        if isinstance(target_type, type) and attrs.has(target_type):
+            if _type_has_getitem(type(src)):
+                return self._deserialize_attrs_class(src, target_type)
+            else:
+                raise TypeCheckError("Mapping", src)
+
+        raise TypeError(f"Unsupported type for deserialization: {target_type}")
 
     def _deserialize_optional(self, src: Any, optional_alt: type[T]) -> Optional[T]:
         """

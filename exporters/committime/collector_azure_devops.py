@@ -9,7 +9,7 @@ from committime import CommitMetric
 from pelorus.config.converters import pass_through
 from pelorus.utils import Url
 
-from .collector_base import AbstractCommitCollector, UnsupportedGITProvider
+from .collector_base import AbstractCommitCollector, check_provider_support
 
 DEFAULT_AZURE_API = Url.parse("https://dev.azure.com")
 
@@ -24,39 +24,32 @@ class AzureDevOpsCommitCollector(AbstractCommitCollector):
         converter=converters.optional(pass_through(Url, Url.parse)),
     )
 
-    # base class impl
+    # Cache of git_clients keyed by organization_url to avoid reconnecting per commit
+    _git_clients: dict = field(factory=dict, init=False)
+
+    def _get_git_client(self, organization_url: str):
+        """Get or create a cached git client for the given organization URL."""
+        if organization_url not in self._git_clients:
+            credentials = BasicAuthentication("", self.token)
+            connection = Connection(base_url=organization_url, creds=credentials)
+            self._git_clients[organization_url] = connection.clients.get_git_client()
+        return self._git_clients[organization_url]
+
     def get_commit_time(self, metric: CommitMetric):
-        """Method called to collect data and send to Prometheus"""
+        """Fetch commit timestamp from Azure DevOps API for the given metric."""
         git_server = metric.git_fqdn
 
-        if (
-            "github" in git_server
-            or "bitbucket" in git_server
-            or "gitlab" in git_server
-            or "gitea" in git_server
-        ):
-            raise UnsupportedGITProvider(
-                "Skipping non Azure DevOps server, found %s" % (git_server)
-            )
-        logging.debug("metric.repo_project %s" % (metric.repo_project))
-        logging.debug("metric.git_server %s" % (metric.git_server))
+        check_provider_support(git_server, "azure")
+        logging.debug("metric.repo_project %s", metric.repo_project)
+        logging.debug("metric.git_server %s", metric.git_server)
 
-        # Fill in with your personal access token and org URL
-        # personal_access_token = 'YOURPAT'
-        # organization_url = 'https://dev.azure.com/YOURORG'
-        personal_access_token = self.token
         organization_url = (
             self.git_api.url + "/" + metric.repo_group
             if metric.repo_group and "/" + metric.repo_group not in self.git_api.url
             else self.git_api.url
         )
 
-        # Create a connection to the org
-        credentials = BasicAuthentication("", personal_access_token)
-        connection = Connection(base_url=organization_url, creds=credentials)
-
-        # Get a client (the "git" client provides access to commits)
-        git_client = connection.clients.get_git_client()
+        git_client = self._get_git_client(organization_url)
 
         commit = git_client.get_commit(
             commit_id=metric.commit_hash,
@@ -70,8 +63,8 @@ class AzureDevOpsCommitCollector(AbstractCommitCollector):
         timestamp = timestamp.replace(microsecond=0)  # second precision
 
         logging.debug("Commit %s", timestamp)
-        if hasattr(commit, "innerExepction"):
-            # This will occur when trying to make an API call to non-Github
+        if hasattr(commit, "innerException"):
+            # Azure DevOps returned an error response
             logging.warning(
                 "Unable to retrieve commit time for build: %s, hash: %s, url: %s. Got http code: %s"
                 % (
@@ -85,15 +78,14 @@ class AzureDevOpsCommitCollector(AbstractCommitCollector):
             try:
                 metric.commit_time = timestamp.isoformat("T", "auto")
                 logging.debug("metric.commit_time %s", timestamp)
-                metric.commit_timestamp = (
-                    timestamp.timestamp()
-                )  # hopefully they haven't provided a naive datetime
+                metric.commit_timestamp = timestamp.timestamp()
                 metric.commit_link = metric.repo_url
             except Exception:
                 logging.error(
-                    "Failed processing commit time for build %s" % metric.build_name,
+                    "Failed processing commit time for build %s",
+                    metric.build_name,
                     exc_info=True,
                 )
-                logging.debug(commit)
+                logging.debug("Failed to process commit: %s", commit.commit_id if hasattr(commit, 'commit_id') else 'unknown')
                 raise
         return metric

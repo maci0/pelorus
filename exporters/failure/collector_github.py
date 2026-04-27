@@ -25,23 +25,17 @@ from failure.collector_base import AbstractFailureCollector, TrackerIssue
 from pelorus.config import env_var_names, env_vars
 from pelorus.config.converters import comma_or_whitespace_separated
 from pelorus.config.log import REDACT, log
-from pelorus.errors import FailureProviderAuthenticationError
+from failure.collector_base import FailureProviderAuthenticationError
 from pelorus.utils import TokenAuth, set_up_requests_session
 from provider_common.github import parse_datetime
-
-# One query limit, exporter will query multiple times.
-# Do not exceed 100 results
-# TODO
-# GITHUB_SEARCH_RESULTS = 100
-# TODO Paginate results
 
 DEFAULT_GITHUB_ISSUE_LABEL = "bug"
 
 
 @define(kw_only=True)
-class GithubFailureCollector(AbstractFailureCollector):
+class GitHubFailureCollector(AbstractFailureCollector):
     """
-    Github implementation of a FailureCollector
+    GitHub implementation of a FailureCollector
     """
 
     user: str = field(default="", init=False)
@@ -80,7 +74,7 @@ class GithubFailureCollector(AbstractFailureCollector):
         try:
             self.user = self._get_github_user()
         except Exception:
-            logging.error("github username not found")
+            logging.error("github username not found", exc_info=True)
             raise
 
     def _get_github_user(self) -> str:
@@ -96,30 +90,36 @@ class GithubFailureCollector(AbstractFailureCollector):
         params: Optional[dict[str, str]],
         url: str,
     ) -> Union[list, dict[str, Any]]:
-        resp = self.session.get(url, headers=headers, params=params)
+        resp = self.session.get(url, headers=headers, params=params, timeout=30)
         try:
             resp.raise_for_status()
-            logging.debug("GitHub successfully returned %s", resp.text)
+            logging.debug("GitHub returned %d bytes", len(resp.text))
             return resp.json()
         except requests.HTTPError as e:
             if resp.status_code == requests.codes.unauthorized:
                 raise FailureProviderAuthenticationError from e
-            else:
-                raise
+            raise
 
     def get_issues(self) -> list[dict]:
         all_issues = []
         for proj in self.projects:
             logging.debug("Collecting issues from: %s", proj)
-            # note: this is getting issues for each github project
             url = "https://{}/repos/{}/issues".format(self.tracker_api, proj)
             headers = {
                 "Accept": "application/vnd.github.v3+json",
             }
-            params = {"state": "all"}
+            params = {"state": "all", "per_page": "100"}
+            page = 1
 
-            issues = self._make_request(headers, params, url)
-            all_issues.extend(issues)
+            while True:
+                params["page"] = str(page)
+                issues = self._make_request(headers, params, url)
+                if not isinstance(issues, list) or not issues:
+                    break
+                all_issues.extend(issues)
+                if len(issues) < 100:
+                    break
+                page += 1
         return all_issues
 
     def search_issues(self) -> list[TrackerIssue]:
@@ -135,12 +135,10 @@ class GithubFailureCollector(AbstractFailureCollector):
                     label for label in labels if self.issue_label in label["name"]
                 )
                 logging.debug(
-                    "Found issue opened: {}, {}: {}".format(
-                        issue["created_at"], issue["number"], issue["title"]
-                    )
+                    "Found issue opened: %s, %s: %s",
+                    issue["created_at"], issue["number"], issue["title"],
                 )
 
-                # Create the GithubFailureMetric
                 created_ts = parse_datetime(issue["created_at"]).timestamp()
                 resolution_ts = None
                 if is_bug:
@@ -151,9 +149,8 @@ class GithubFailureCollector(AbstractFailureCollector):
                     if label:
                         if issue["closed_at"]:
                             logging.debug(
-                                "Found issue close: {}, {}: {}".format(
-                                    issue["closed_at"], issue["number"], issue["title"]
-                                )
+                                "Found issue close: %s, %s: %s",
+                                issue["closed_at"], issue["number"], issue["title"],
                             )
 
                             resolution_ts = parse_datetime(
@@ -174,4 +171,4 @@ class GithubFailureCollector(AbstractFailureCollector):
             return label["name"].split("=")[1]
         # default to repo name if app_label is not set
         else:
-            return issue["repository_url"].split("/")[-1:][0]
+            return issue["repository_url"].split("/")[-1]

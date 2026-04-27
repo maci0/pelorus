@@ -9,8 +9,21 @@ from datetime import datetime, timedelta, timezone
 
 _ISO_ZULU_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
-# Time after which metrics for the deploytime exporter will not be accepted
-METRIC_TIMESTAMP_THRESHOLD_MINUTES = 30
+# Time after which metrics will not be accepted (used by deploytime, webhook, etc.)
+# Override with PELORUS_TIMESTAMP_THRESHOLD_MINUTES env var for seeding historical data
+import os as _os
+
+_threshold_raw = _os.environ.get("PELORUS_TIMESTAMP_THRESHOLD_MINUTES", "30")
+try:
+    METRIC_TIMESTAMP_THRESHOLD_MINUTES = int(_threshold_raw)
+except ValueError:
+    raise ValueError(
+        f"PELORUS_TIMESTAMP_THRESHOLD_MINUTES must be an integer, got: {_threshold_raw!r}"
+    )
+if METRIC_TIMESTAMP_THRESHOLD_MINUTES < 1:
+    raise ValueError(
+        f"PELORUS_TIMESTAMP_THRESHOLD_MINUTES must be >= 1, got: {METRIC_TIMESTAMP_THRESHOLD_MINUTES}"
+    )
 
 
 def is_zone_aware(d: datetime) -> bool:
@@ -24,7 +37,8 @@ def is_zone_aware(d: datetime) -> bool:
 def parse_assuming_utc(timestring: str, format: str) -> datetime:
     """
     Parses assuming that the timestring is UTC only.
-    This means it _must_ be naive, e.g. has no zone/offset parsing in the format.
+    The format must not include timezone information.
+    The parsed datetime is returned as timezone-aware (UTC).
     Otherwise, a ValueError will be raised.
     """
     parsed = datetime.strptime(timestring, format)
@@ -68,7 +82,7 @@ def parse_assuming_utc_with_fallback(
 def parse_tz_aware(timestring: str, format: str) -> datetime:
     """
     Parses a timestring that includes its timezone information.
-    That means it _must not_ be naive, e.g. has proper zone/parsing in the format.
+    The format must include timezone information, so the parsed result is aware.
     Otherwise, a ValueError will be raised.
     """
     parsed = datetime.strptime(timestring, format)
@@ -85,7 +99,7 @@ def parse_guessing_timezone_DYNAMIC(timestring: str, format: str) -> datetime:
     Assumes the timezone is correct if the format makes it aware, but otherwise assumes UTC.
 
     This should only be used in a user-provided case.\
-    Otherwise, use one of the other methods to validate that an API contract hasn't been borken.
+    Otherwise, use one of the other methods to validate that an API contract hasn't been broken.
     """
     parsed = datetime.strptime(timestring, format)
     if is_zone_aware(parsed):
@@ -96,11 +110,11 @@ def parse_guessing_timezone_DYNAMIC(timestring: str, format: str) -> datetime:
 
 def to_epoch_from_string(timestring: str) -> datetime:
     """
-    It's really EPOCH to EPOCH conversion with datetime return object.
+    Convert a string containing a Unix epoch timestamp to a datetime object.
 
-    If timestring matches expected EPOCH format a proper datetime object is returned,
-    otherwise raises ValueError and consumer of this function probably want's to use
-    other format of timestamp.
+    The timestring must be a 10-digit epoch timestamp (seconds since 1970-01-01),
+    optionally followed by a fractional part (which is discarded).
+    Raises ValueError if the string is not a valid 10-digit epoch.
     """
     epoch_date_time = timestring.split(".")[0]
     # Try to convert to an EPOCH, but only if it's 10 digit
@@ -109,7 +123,7 @@ def to_epoch_from_string(timestring: str) -> datetime:
             f"Tried to get epoch from not allowed string length: {timestring}"
         )
     else:
-        return datetime.fromtimestamp(int(epoch_date_time))
+        return datetime.fromtimestamp(int(epoch_date_time), tz=timezone.utc)
 
 
 def second_precision(dt: datetime) -> datetime:
@@ -137,10 +151,20 @@ def to_iso(dt: datetime) -> str:
 
 def is_out_of_date(timestring: str) -> bool:
     """
-    Helper function, which allows to filter out metrics which are older then
+    Helper function, which allows to filter out metrics which are older than
     the accepted time. This is to ensure Prometheus will not try to scrape too
     old metrics.
     """
-    return datetime.now() - to_epoch_from_string(timestring) > timedelta(
+    return datetime.now(timezone.utc) - to_epoch_from_string(timestring) > timedelta(
         minutes=METRIC_TIMESTAMP_THRESHOLD_MINUTES
     )
+
+
+def is_out_of_date_timestamp(timestamp: float) -> bool:
+    """
+    Like is_out_of_date, but takes a Unix timestamp directly
+    instead of a string, avoiding unnecessary conversions.
+    """
+    return datetime.now(timezone.utc) - datetime.fromtimestamp(
+        timestamp, tz=timezone.utc
+    ) > timedelta(minutes=METRIC_TIMESTAMP_THRESHOLD_MINUTES)

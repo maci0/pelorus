@@ -3,8 +3,6 @@ from __future__ import annotations
 from io import StringIO
 from typing import Any, Generic, Optional, Sequence, TypeVar, Union
 
-from exceptiongroup import ExceptionGroup
-
 from pelorus.utils import BadAttributePathError
 
 
@@ -37,10 +35,7 @@ class MissingFieldError(FieldError[Optional[BadAttributePathError]]):
 
 
 class MissingFieldWithMultipleSourcesError(MissingFieldError):
-    "A field that was missing, that was not present multiple alternative sources."
-
-    # TODO: kind of an exception group in its own right, but do we care?
-    # because each fallback could have its own cause, etc...
+    "A field that was not present in multiple alternative sources."
 
     def __init__(self, field_name: str, sources: Sequence[str]):
         # overriding FieldError's init a bit for better message handling.
@@ -49,6 +44,7 @@ class MissingFieldWithMultipleSourcesError(MissingFieldError):
         self.sources = sources
 
         self.message = f"{self.field_name} was not present in any of the following sources: {', '.join(self.sources)}"
+        Exception.__init__(self, self.message)
 
 
 class TypeCheckError(TypeError):
@@ -120,7 +116,7 @@ class DeserializationErrors(ExceptionGroup[DeserializationError], Deserializatio
 
         return self
 
-    # workaround due to https://github.com/agronholm/exceptiongroup/issues/46
+    # workaround: ExceptionGroup.__new__ sets message, so __init__ must call super().__init__ again
     def __init__(
         self,
         errors: Sequence[DeserializationError],

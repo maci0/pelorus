@@ -1,4 +1,6 @@
 import logging
+import re
+from urllib.parse import urlparse
 
 import requests
 from attrs import define, field
@@ -10,14 +12,18 @@ from pelorus.timeutil import parse_assuming_utc, second_precision
 from pelorus.utils import set_up_requests_session
 
 SN_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
-SN_QUERY = "/api/now/table/incident?sysparm_fields={0}%2C{1}%2Cstate%2Cnumber%2C{2} \
-            &sysparm_display_value=true&sysparm_limit={3}&sysparm_offset={4}"
+SN_QUERY = (
+    "/api/now/table/incident?sysparm_fields={0}%2C{1}%2Cstate%2Cnumber%2C{2}"
+    "&sysparm_display_value=true&sysparm_limit={3}&sysparm_offset={4}"
+)
 SN_OPENED_FIELD = "opened_at"
 SN_RESOLVED_FIELD = "resolved_at"
 
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 PAGE_SIZE = 100
+
+_SAFE_FIELD_NAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.]*$")
 
 
 @define(kw_only=True)
@@ -46,13 +52,19 @@ class ServiceNowFailureCollector(AbstractFailureCollector):
     offset: int = field(default=0, init=False)
 
     def __attrs_post_init__(self):
+        parsed = urlparse(self.server)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"SERVER must use http or https scheme, got: {parsed.scheme!r}")
+        if not parsed.hostname:
+            raise ValueError("SERVER must include a hostname")
+        if not _SAFE_FIELD_NAME.match(self.app_name_field):
+            raise ValueError(f"Invalid APP_FIELD value: {self.app_name_field!r}")
         set_up_requests_session(
             self.session, self.tls_verify, username=self.username, token=self.token
         )
         self.session.headers.update(SN_HEADERS)
 
     def search_issues(self):
-        # Connect to ServiceNow
         self.offset = 0
 
         critical_issues = []
@@ -70,7 +82,6 @@ class ServiceNowFailureCollector(AbstractFailureCollector):
                     issue.get(SN_OPENED_FIELD),
                     issue.get(SN_RESOLVED_FIELD),
                 )
-                # Create the FailureMetric
                 created_ts = parse_assuming_utc(
                     issue[SN_OPENED_FIELD], _DATETIME_FORMAT
                 )
@@ -108,21 +119,16 @@ class ServiceNowFailureCollector(AbstractFailureCollector):
         )
         tracker_url = self.server + self.tracker_query
 
-        # Do the HTTP request
-        response = self.session.get(tracker_url)
-        # Check for HTTP codes other than 200
-
+        response = self.session.get(tracker_url, timeout=30)
         if response.status_code != 200:
             logging.error(
-                "Status:, %s, Headers:, %s, Error Response: %s",
+                "ServiceNow request failed with status: %s, url: %s",
                 response.status_code,
-                response.headers,
-                response.json(),
+                tracker_url,
             )
-            raise RuntimeError("Error connecting to Service now")
-        # Decode the JSON response into a dictionary and use the data
+            raise RuntimeError(f"Error connecting to ServiceNow (HTTP {response.status_code})")
         data = response.json()
-        logging.debug(data.get("result"))
+        logging.debug("ServiceNow query result: %s", data.get("result"))
         self.offset = self.offset + PAGE_SIZE
         return data
 

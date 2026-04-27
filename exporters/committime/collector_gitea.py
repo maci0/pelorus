@@ -9,7 +9,7 @@ from pelorus.config.converters import pass_through
 from pelorus.timeutil import parse_assuming_utc, second_precision
 from pelorus.utils import Url, set_up_requests_session
 
-from .collector_base import AbstractCommitCollector, UnsupportedGITProvider
+from .collector_base import AbstractCommitCollector, check_provider_support
 
 _DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -34,21 +34,12 @@ class GiteaCommitCollector(AbstractCommitCollector):
             self.session, self.tls_verify, username=self.username, token=self.token
         )
 
-    # base class impl
     def get_commit_time(self, metric: CommitMetric):
-        """Method called to collect data and send to Prometheus"""
+        """Fetch commit timestamp from Gitea API for the given metric."""
 
         git_server = metric.git_server
 
-        if (
-            "github" in git_server
-            or "bitbucket" in git_server
-            or "gitlab" in git_server
-            or "azure" in git_server
-        ):
-            raise UnsupportedGITProvider(
-                "Skipping non Gitea server, found %s" % (git_server)
-            )
+        check_provider_support(git_server, "gitea")
 
         path = self._path_template.format(
             group=metric.repo_group,
@@ -56,19 +47,18 @@ class GiteaCommitCollector(AbstractCommitCollector):
             hash=metric.commit_hash,
         )
         url = self.git_api._replace(path=path).url
-        logging.debug("URL %s" % (url))
-        response = self.session.get(url, auth=(self.username, self.token))
-        logging.debug("response %s", response)
+        logging.debug("URL %s", url)
+        response = self.session.get(url, timeout=30)
+        logging.debug("response status=%s reason=%s", response.status_code, response.reason)
         if response.status_code != 200:
-            # This will occur when trying to make an API call to non-Github
-            logging.warning(
-                "Unable to retrieve commit time for build: %s, hash: %s, url: %s. Got http code: %s"
-                % (
-                    metric.build_name,
-                    metric.commit_hash,
-                    metric.repo_url,
-                    str(response.status_code),
-                )
+            log_level = logging.ERROR if response.status_code in (401, 403) else logging.WARNING
+            logging.log(
+                log_level,
+                "Unable to retrieve commit time for build: %s, hash: %s, url: %s. Got http code: %s",
+                metric.build_name,
+                metric.commit_hash,
+                metric.repo_url,
+                response.status_code,
             )
         else:
             commit = response.json()
@@ -86,9 +76,10 @@ class GiteaCommitCollector(AbstractCommitCollector):
                 metric.commit_link = commit["html_url"]
             except Exception:
                 logging.error(
-                    "Failed processing commit time for build %s" % metric.build_name,
+                    "Failed processing commit time for build %s",
+                    metric.build_name,
                     exc_info=True,
                 )
-                logging.debug(commit)
+                logging.debug("Raw commit response keys: %s", list(commit.keys()) if isinstance(commit, dict) else type(commit).__name__)
                 raise
         return metric

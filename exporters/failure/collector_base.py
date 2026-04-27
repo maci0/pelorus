@@ -1,16 +1,36 @@
 from __future__ import annotations
 
 import logging
+import time
 from abc import abstractmethod
-from typing import Collection, Iterable, Union
+from typing import Collection, Iterable
 
+from prometheus_client import Counter, Gauge
 from prometheus_client.core import GaugeMetricFamily
 
 import pelorus
 from provider_common import format_app_name
 
-# TODO 1: CI needs to create failures on the fly to enable this
-# from pelorus.timeutil import METRIC_TIMESTAMP_THRESHOLD_MINUTES, is_out_of_date
+
+_collection_duration = Gauge(
+    "pelorus_failure_collection_duration_seconds",
+    "Duration of the last failure metric collection in seconds",
+)
+_collection_errors = Counter(
+    "pelorus_failure_collection_errors_total",
+    "Total number of failure metric collection errors",
+)
+
+
+class FailureProviderAuthenticationError(Exception):
+    """
+    Exception raised for authentication issues
+    """
+
+    auth_message = "Check the TOKEN: not authorized, invalid credentials"
+
+    def __init__(self, message=auth_message):
+        super().__init__(message)
 
 
 class AbstractFailureCollector(pelorus.AbstractPelorusExporter):
@@ -19,66 +39,73 @@ class AbstractFailureCollector(pelorus.AbstractPelorusExporter):
     This class should be extended for the system which contains the failure records.
     """
 
-    def collect(self):
-        # This function runs when the app starts and every time the /metrics
-        # endpoint is accessed
-        creation_metric = GaugeMetricFamily(
+    _FAILURE_METRIC_LABELS = ["app", "issue_number"]
+
+    @staticmethod
+    def _new_creation_metric():
+        return GaugeMetricFamily(
             "failure_creation_timestamp",
             "Failure Creation Timestamp",
-            labels=["app", "issue_number"],
+            labels=AbstractFailureCollector._FAILURE_METRIC_LABELS,
         )
-        failure_metric = GaugeMetricFamily(
+
+    @staticmethod
+    def _new_resolution_metric():
+        return GaugeMetricFamily(
             "failure_resolution_timestamp",
             "Failure Resolution Timestamp",
-            labels=["app", "issue_number"],
+            labels=AbstractFailureCollector._FAILURE_METRIC_LABELS,
         )
 
-        critical_issues = self.search_issues()
-        logging.debug(f"Collected {len(critical_issues)} failure(s) in this run")
+    def describe(self) -> list[GaugeMetricFamily]:
+        return [self._new_creation_metric(), self._new_resolution_metric()]
 
-        if critical_issues:
-            metrics = self.generate_metrics(critical_issues)
-            # TODO 1:
-            # number_of_dropped = 0
-            for m in metrics:
-                # TBD_1:
-                # if not is_out_of_date(str(m.deploy_time_timestamp)):
-                if not m.is_resolution:
-                    logging.debug(
-                        "Collected failure_creation_timestamp{ app=%s, issue_number=%s } %s"
-                        % (m.labels[0], m.labels[1], m.time_stamp)
-                    )
-                    creation_metric.add_metric(
-                        [format_app_name(m.labels[0]), m.labels[1]],
-                        m.get_value(),
-                        timestamp=m.get_value(),
-                    )
-                else:
-                    logging.debug(
-                        "Collected failure_resolution_timestamp{ app=%s, issue_number=%s } %s"
-                        % (m.labels[0], m.labels[1], m.time_stamp)
-                    )
-                    failure_metric.add_metric(
-                        [format_app_name(m.labels[0]), m.labels[1]],
-                        m.get_value(),
-                        timestamp=m.get_value(),
-                    )
-            # TODO 1:
-            #     else:
-            #         number_of_dropped += 1
-            #         debug_msg = f"Failure too old to be collected: failure_{'resolution' " \
-            #                      "if m.is_resolution else 'creation'}_timestamp{{ app={m.labels[0]}, " \
-            #                      "issue_number={m.labels[1]} }} {m.time_stamp}"
-            #         logging.debug(debug_msg)
-            # if number_of_dropped:
-            #     logging.info(
-            #         "Number of Failure metrics that are older then %smin and won't be collected: %s",
-            #         METRIC_TIMESTAMP_THRESHOLD_MINUTES,
-            #         number_of_dropped,
-            #     )
+    def collect(self) -> Iterable[GaugeMetricFamily]:
+        # This function runs when the app starts and every time the /metrics
+        # endpoint is accessed
+        start = time.monotonic()
+        try:
+            creation_metric = self._new_creation_metric()
+            failure_metric = self._new_resolution_metric()
 
-            yield (creation_metric)
-            yield (failure_metric)
+            critical_issues = self.search_issues()
+            logging.debug("Collected %d failure(s) in this run", len(critical_issues))
+
+            if critical_issues:
+                metrics = self.generate_metrics(critical_issues)
+                for m in metrics:
+                    if not m.is_resolution:
+                        logging.debug(
+                            "Collected failure_creation_timestamp{ app=%s, issue_number=%s } %s",
+                            m.labels[0], m.labels[1], m.time_stamp,
+                        )
+                        creation_metric.add_metric(
+                            [format_app_name(m.labels[0]), m.labels[1]],
+                            m.time_stamp,
+                            timestamp=m.time_stamp,
+                        )
+                    else:
+                        logging.debug(
+                            "Collected failure_resolution_timestamp{ app=%s, issue_number=%s } %s",
+                            m.labels[0], m.labels[1], m.time_stamp,
+                        )
+                        failure_metric.add_metric(
+                            [format_app_name(m.labels[0]), m.labels[1]],
+                            m.time_stamp,
+                            timestamp=m.time_stamp,
+                        )
+
+            yield creation_metric
+            yield failure_metric
+        except Exception:
+            _collection_errors.inc()
+            logging.error("Failure metric collection failed", exc_info=True)
+            yield self._new_creation_metric()
+            yield self._new_resolution_metric()
+        finally:
+            duration = time.monotonic() - start
+            _collection_duration.set(duration)
+            logging.debug("collect: finished in %.2fs", duration)
 
     def generate_metrics(
         self, issues: Iterable[TrackerIssue]
@@ -101,7 +128,6 @@ class AbstractFailureCollector(pelorus.AbstractPelorusExporter):
 
     @abstractmethod
     def search_issues(self) -> Collection[TrackerIssue]:
-        # This will be tracker specific
         pass
 
 
@@ -109,8 +135,8 @@ class TrackerIssue:
     def __init__(
         self,
         issue_number,
-        creationdate: Union[str, float, int],
-        resolutiondate: Union[str, float, int],
+        creationdate: str | float | int,
+        resolutiondate: str | float | int,
         app,
     ):
         self.creationdate = creationdate
@@ -121,12 +147,11 @@ class TrackerIssue:
 
 class FailureMetric:
     def __init__(
-        self, time_stamp: Union[str, float, int], is_resolution=False, labels=[]
+        self, time_stamp: str | float | int, is_resolution=False, labels=None
     ):
+        if labels is None:
+            labels = []
         self.time_stamp = time_stamp
         self.is_resolution = is_resolution
         self.labels = labels
 
-    def get_value(self):
-        """Returns the timestamp"""
-        return self.time_stamp

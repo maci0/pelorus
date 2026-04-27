@@ -25,17 +25,17 @@ from prometheus_client.core import REGISTRY
 import pelorus
 from failure.collector_azure_devops import AzureDevOpsFailureCollector
 from failure.collector_base import AbstractFailureCollector
-from failure.collector_github import GithubFailureCollector
+from failure.collector_github import GitHubFailureCollector
 from failure.collector_jira import JiraFailureCollector
-from failure.collector_pagerduty import PagerdutyFailureCollector
+from failure.collector_pagerduty import PagerDutyFailureCollector
 from failure.collector_servicenow import ServiceNowFailureCollector
 from pelorus.config import env_vars, load_and_log
 
 PROVIDER_TYPES = {
     "jira": JiraFailureCollector,
-    "github": GithubFailureCollector,
+    "github": GitHubFailureCollector,
     "servicenow": ServiceNowFailureCollector,
-    "pagerduty": PagerdutyFailureCollector,
+    "pagerduty": PagerDutyFailureCollector,
     "azure-devops": AzureDevOpsFailureCollector,
 }
 
@@ -53,7 +53,6 @@ class FailureCollectorConfig:
 
 
 def set_up(prod: bool = True) -> AbstractFailureCollector:
-    # TODO refactor: all exporters have same structure
     pelorus.setup_logging(prod=prod)
 
     config = load_and_log(FailureCollectorConfig)
@@ -64,8 +63,20 @@ def set_up(prod: bool = True) -> AbstractFailureCollector:
 
 
 if __name__ == "__main__":
-    set_up()
-    # TODO refactor: create function, all exporters have same structure
+    import logging
+
+    try:
+        set_up()
+    except Exception as e:
+        logging.error(
+            "Failed to configure failure exporter: %s. "
+            "Set PROVIDER (jira/github/servicenow/pagerduty/azure-devops) "
+            "and required provider settings (e.g. SERVER, TOKEN). "
+            "Starting metrics server anyway - configure and restart to collect failure data.",
+            e,
+            exc_info=True,
+        )
+
     start_http_server(8080)
 
     while True:
