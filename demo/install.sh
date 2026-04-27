@@ -9,6 +9,7 @@
 #   ./demo/install.sh                         # auto-detect (prefer Red Hat)
 #   OPERATOR_SOURCE=redhat ./demo/install.sh  # force Red Hat operators
 #   OPERATOR_SOURCE=community ./demo/install.sh  # force community operators
+#   OAUTH_ENABLED=false ./demo/install.sh        # disable OAuth proxy (basic auth)
 #
 set -euo pipefail
 
@@ -18,6 +19,7 @@ TIMEOUT="${TIMEOUT:-900}"
 POLL=10
 OPERATOR_SOURCE="${OPERATOR_SOURCE:-auto}"
 PELORUS_PASSWORD="${PELORUS_PASSWORD:-$(openssl rand -base64 12)}"
+OAUTH_ENABLED="${OAUTH_ENABLED:-true}"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 fail() { log "FAIL: $*" >&2; exit 1; }
@@ -71,6 +73,7 @@ fi
 log "========================================="
 log "Installing Pelorus on OpenShift"
 log "  Operator source: $OPERATOR_SOURCE"
+log "  OAuth proxy:     $OAUTH_ENABLED"
 log "========================================="
 
 # 1. Namespace
@@ -246,6 +249,13 @@ done
 log "Operator is running"
 
 # 6. Create Pelorus CR
+HTPASSWD_FIELD=""
+if [[ "$OAUTH_ENABLED" == "true" && "$OPERATOR_SOURCE" == "community" ]]; then
+  HTPASSWD=$(htpasswd -s -b -n internal "$PELORUS_PASSWORD" 2>/dev/null) || \
+    HTPASSWD="internal:{SHA}$(echo -n "$PELORUS_PASSWORD" | openssl dgst -sha1 -binary | base64)"
+  HTPASSWD_FIELD="openshift_prometheus_htpasswd_auth: \"$HTPASSWD\""
+fi
+
 log "Creating Pelorus instance (operator_source=$OPERATOR_SOURCE)..."
 oc apply -n "$NAMESPACE" -f - <<EOF
 apiVersion: charts.pelorus.dora-metrics.io/v1alpha1
@@ -254,8 +264,9 @@ metadata:
   name: pelorus
 spec:
   openshift_prometheus_basic_auth_pass: "$PELORUS_PASSWORD"
+  $HTPASSWD_FIELD
   operator_source: $OPERATOR_SOURCE
-  oauth_proxy_enabled: true
+  oauth_proxy_enabled: $OAUTH_ENABLED
   prometheus_retention: 1y
   prometheus_retention_size: 1GB
   prometheus_storage: false
@@ -329,6 +340,7 @@ done
 log "========================================="
 log "Pelorus installed successfully"
 log "  Operator source: $OPERATOR_SOURCE"
+log "  OAuth proxy:     $OAUTH_ENABLED"
 log "========================================="
 echo ""
 echo "  Grafana:  https://${GRAFANA_ROUTE:-pending}"
