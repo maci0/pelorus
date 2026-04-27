@@ -69,6 +69,19 @@ The `APP_FILE` environment variable selects which exporter runs:
 | Failure | `failure/app.py` |
 | Webhook | `webhook/app.py` |
 
+## Building the Operator Image
+
+The Pelorus operator is a Helm-based operator built with the Operator SDK. Build it before deploying with `make deploy`:
+
+```bash
+# Docker / Podman
+docker build -t pelorus-operator:latest -f pelorus-operator/Dockerfile pelorus-operator/
+
+# OpenShift (binary build)
+oc new-build --name=pelorus-operator --strategy=docker --binary -n pelorus
+oc start-build pelorus-operator --from-dir=pelorus-operator --follow -n pelorus
+```
+
 ## Deploying with Helm
 
 ```bash
