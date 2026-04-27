@@ -66,6 +66,8 @@ rules:
   - patch
   - update
   - watch
+  - bind
+  - escalate
   apiGroups:
   - "rbac.authorization.k8s.io"
   resources:
@@ -95,6 +97,7 @@ rules:
   - "monitoring.coreos.com"
   resources:
   - "prometheuses"
+  - "prometheuses/api"
   - "prometheusrules"
   - "servicemonitors"
 - verbs:

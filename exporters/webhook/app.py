@@ -71,13 +71,13 @@ def register_plugin(webhook_plugin: Type[PelorusWebhookPlugin]):
 
 def load_plugins(plugins_dir_name: Optional[str] = "plugins"):
     plugin_dir_path = WEBHOOK_DIR / plugins_dir_name
-    sys.path.append(WEBHOOK_DIR.as_posix())
+    package_path = f"webhook.{plugins_dir_name}"
     logging.info("Loading plugins from directory %s", plugin_dir_path)
     if plugin_dir_path.is_dir():
         for filename in plugin_dir_path.iterdir():
             if filename.is_file() and filename.name.endswith("_handler.py"):
                 module = importlib.import_module(
-                    f".{filename.stem}", package=f"{plugins_dir_name}"
+                    f".{filename.stem}", package=package_path
                 )
                 for name in dir(module):
                     obj = getattr(module, name)

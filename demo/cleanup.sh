@@ -54,6 +54,8 @@ oc delete clusterrolebinding pelorus-grafana-cluster-monitoring-view 2>/dev/null
 oc delete clusterrolebinding pelorus-operator-manager-rolebinding 2>/dev/null || true
 oc delete clusterrolebinding pelorus-operator-pelorus-manager-rolebinding 2>/dev/null || true
 oc delete clusterrolebinding pelorus-operator-proxy-rolebinding 2>/dev/null || true
+oc delete clusterrole pelorus-operator-monitoring-extras 2>/dev/null || true
+oc delete clusterrolebinding pelorus-operator-monitoring-extras 2>/dev/null || true
 
 # Kill port-forwards
 lsof -ti:18080,19090,13000 2>/dev/null | xargs kill 2>/dev/null || true

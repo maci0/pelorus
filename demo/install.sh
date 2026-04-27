@@ -228,6 +228,9 @@ log "Granting image pull access..."
 oc policy add-role-to-user system:image-puller \
   "system:serviceaccount:${OPERATOR_NS}:pelorus-operator-controller-manager" \
   --namespace="$NAMESPACE" 2>/dev/null || true
+oc policy add-role-to-group system:image-puller \
+  "system:serviceaccounts:${NAMESPACE}" \
+  --namespace="$NAMESPACE" 2>/dev/null || true
 
 log "Waiting for operator..."
 elapsed=0
