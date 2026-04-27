@@ -3,7 +3,6 @@ import pytest
 from committime.collector_base import CommitMetric
 
 
-# Unit tests for the CommitMetric
 @pytest.mark.parametrize("appname", [("pytest")])
 def test_commitmetric_initial(appname):
     metric = CommitMetric(appname)
@@ -51,7 +50,6 @@ def test_commitmetric_repos(url, repo_protocol, fqdn, project_name):
         assert metric.repo_group is None
     assert metric.repo_project is not None
     assert metric.git_fqdn == fqdn
-    #    assert metric.git_server == str(protocol + '://' + fqdn)
     assert metric.repo_project == project_name
     assert metric.azure_project is None
 

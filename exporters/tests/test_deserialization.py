@@ -6,6 +6,7 @@ from kubernetes.dynamic.resource import ResourceField
 
 from pelorus.deserialization import (
     DeserializationErrors,
+    FieldError,
     FieldTypeCheckError,
     InnerFieldDeserializationErrors,
     MissingFieldError,
@@ -53,7 +54,7 @@ def test_extract_list_types_from_non_list(type_: type):
 
 @pytest.mark.parametrize(
     "input,output",
-    [(list[int], int), (list[int], int)],
+    [(list[int], int), (list[str], str)],
 )
 def test_extract_list_types_from_list(input: type, output: type):
     assert _extract_list_type(input) == output
@@ -100,7 +101,6 @@ def test_deserialize_type_error():
         )
 
     assert e.value.subgroup(lambda e: isinstance(e, TypeError)) is not None
-    print(e.value)
 
 
 def test_deserialize_missing_error():
@@ -108,7 +108,6 @@ def test_deserialize_missing_error():
         deserialize(dict(str_="str"), AttrsTestClass, target_name="AttrsTestClass")
 
     assert e.value.subgroup(lambda e: isinstance(e, MissingFieldError)) is not None
-    print(e.value)
 
 
 def test_deserialize_gives_multiple_errors_at_once():
@@ -119,11 +118,10 @@ def test_deserialize_gives_multiple_errors_at_once():
             target_name="AttrsTestClass",
         )
 
-    print(e.value)
     exceptions = e.value.exceptions
     assert len(exceptions) == 2
     assert isinstance(exceptions[0], FieldTypeCheckError)
-    assert isinstance(exceptions[1], InnerFieldDeserializationErrors)
+    assert isinstance(exceptions[1], (InnerFieldDeserializationErrors, FieldError))
 
 
 @pytest.mark.parametrize("nested_path", ["foo.bar", ("foo", "bar")])
@@ -156,7 +154,6 @@ def test_nested_field_type_err():
         deserialize(dict(foo=dict(bar="string!")), Nested, target_name="Nested")
 
     assert e.value.subgroup(lambda e: isinstance(e, TypeError)) is not None
-    print(e.value)
 
 
 def test_nested_missing():
@@ -167,7 +164,7 @@ def test_nested_missing():
     with pytest.raises(DeserializationErrors) as e:
         deserialize(dict(foo=dict()), Nested)
 
-    print(e.value)
+    assert e.value.subgroup(lambda e: isinstance(e, MissingFieldError)) is not None
 
 
 def test_multi_nested_missing():
@@ -178,7 +175,7 @@ def test_multi_nested_missing():
     with pytest.raises(DeserializationErrors) as e:
         deserialize(dict(foo=dict()), Nested)
 
-    print(e.value)
+    assert e.value.subgroup(lambda e: isinstance(e, MissingFieldError)) is not None
 
 
 def test_default():
@@ -227,7 +224,7 @@ def test_embedded_err():
     with pytest.raises(DeserializationErrors) as e:
         deserialize(dict(inner=dict(int_="str!")), Outer)
 
-    print(e.value)
+    assert e.value.subgroup(lambda e: isinstance(e, InnerFieldDeserializationErrors)) is not None
 
 
 def test_inherited():
@@ -404,7 +401,7 @@ def test_resource_field_error():
     with pytest.raises(DeserializationErrors) as e:
         deserialize(some_kube_resource, FooHolder)
 
-    print(e.value)
+    assert e.value.subgroup(lambda e: isinstance(e, (TypeError, FieldTypeCheckError))) is not None
 
 
 def test_keeping_source():

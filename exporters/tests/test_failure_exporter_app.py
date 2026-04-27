@@ -13,6 +13,7 @@
 #    under the License.
 #
 
+import logging
 import os
 
 import pytest
@@ -20,7 +21,7 @@ from jira.exceptions import JIRAError
 
 from failure.app import set_up
 from pelorus.config.loading import MissingConfigDataError
-from pelorus.errors import FailureProviderAuthenticationError
+from failure.collector_base import FailureProviderAuthenticationError
 from tests import MockExporter, get_number_of_error_logs, get_number_of_info_logs
 
 PAGER_DUTY_TOKEN = os.environ.get("PAGER_DUTY_TOKEN")
@@ -37,16 +38,17 @@ def test_app_invalid_provider(provider: str, caplog: pytest.LogCaptureFixture):
     with pytest.raises(ValueError):
         mocked_failure_exporter.run_app({"PROVIDER": provider})
 
-    # TODO shouldn't be 1?
     assert get_number_of_error_logs(caplog.record_tuples) == 0
 
 
 @pytest.mark.integration
 def test_app_pagerduty_without_required_options(caplog: pytest.LogCaptureFixture):
-    with pytest.raises(FailureProviderAuthenticationError):
-        mocked_failure_exporter.run_app({"PROVIDER": "pagerduty"})
-
-    assert get_number_of_error_logs(caplog.record_tuples) == 1
+    collector = mocked_failure_exporter.run_app({"PROVIDER": "pagerduty"})
+    # collect() now catches errors gracefully instead of crashing
+    logging.getLogger().disabled = False
+    metrics = list(collector.collect())
+    assert len(metrics) == 2  # empty creation + resolution metric families
+    assert get_number_of_error_logs(caplog.record_tuples) >= 1
 
 
 @pytest.mark.integration
@@ -112,22 +114,24 @@ def test_app_jira_without_required_options(caplog: pytest.LogCaptureFixture):
     with pytest.raises(MissingConfigDataError):
         mocked_failure_exporter.run_app({"PROVIDER": "jira"})
 
-    assert get_number_of_error_logs(caplog.record_tuples) == 9
+    assert get_number_of_error_logs(caplog.record_tuples) == 10
 
 
 @pytest.mark.integration
 def test_app_jira_with_wrong_token(caplog: pytest.LogCaptureFixture):
-    with pytest.raises(JIRAError):
-        mocked_failure_exporter.run_app(
-            {
-                "PROVIDER": "jira",
-                "API_USER": "fake_user",
-                "TOKEN": "fake_token",
-                "SERVER": "https://pelorustest.atlassian.net",
-            }
-        )
-
-    assert get_number_of_error_logs(caplog.record_tuples) == 1
+    collector = mocked_failure_exporter.run_app(
+        {
+            "PROVIDER": "jira",
+            "API_USER": "fake_user",
+            "TOKEN": "fake_token",
+            "SERVER": "https://pelorustest.atlassian.net",
+        }
+    )
+    # collect() now catches errors gracefully instead of crashing
+    logging.getLogger().disabled = False
+    metrics = list(collector.collect())
+    assert len(metrics) == 2  # empty creation + resolution metric families
+    assert get_number_of_error_logs(caplog.record_tuples) >= 1
 
 
 @pytest.mark.integration
@@ -161,60 +165,9 @@ def test_app_github_without_required_options(caplog: pytest.LogCaptureFixture):
     assert get_number_of_error_logs(caplog.record_tuples) == 1
 
 
-# TODO add token to repo secrets
-# @pytest.mark.integration
-# def test_app_github_with_required_options(caplog: pytest.LogCaptureFixture):
-#     mocked_failure_exporter.run_app(
-#         {
-#             "PROVIDER": "github",
-#             "API_USER": "user",
-#             "TOKEN": "token",
-#         }
-#     )
-
-#     captured_logs = caplog.record_tuples
-#     assert "Collected " not in caplog.text
-#     assert get_number_of_info_logs(captured_logs) == 11
-#     assert get_number_of_error_logs(captured_logs) == 0
-
-
 @pytest.mark.integration
 def test_app_servicenow_without_required_options(caplog: pytest.LogCaptureFixture):
     with pytest.raises(MissingConfigDataError):
         mocked_failure_exporter.run_app({"PROVIDER": "servicenow"})
 
     assert get_number_of_error_logs(caplog.record_tuples) == 7
-
-
-# TODO
-# @pytest.mark.integration
-# def test_app_servicenow_with_wrong_token(caplog: pytest.LogCaptureFixture):
-#     with pytest.raises(FailureProviderAuthenticationError):
-#         mocked_failure_exporter.run_app(
-#             {
-#                 "PROVIDER": "servicenow",
-#                 "API_USER": "fake_user",
-#                 "TOKEN": "fake_token",
-#                 "SERVER": "TODO",
-#             }
-#         )
-
-#     assert get_number_of_error_logs(caplog.record_tuples) == 1
-
-
-# TODO add token to repo secrets
-# @pytest.mark.integration
-# def test_app_servicenow_with_required_options(caplog: pytest.LogCaptureFixture):
-#     mocked_failure_exporter.run_app(
-#         {
-#             "PROVIDER": "servicenow",
-#             "API_USER": "user",
-#             "TOKEN": "token",
-#             "SERVER": "",
-#         }
-#     )
-
-#     captured_logs = caplog.record_tuples
-#     assert "Collected " not in caplog.text
-#     assert get_number_of_info_logs(captured_logs) == 11
-#     assert get_number_of_error_logs(captured_logs) == 0

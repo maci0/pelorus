@@ -31,7 +31,7 @@ from webhook.store.in_memory_metric import (
 
 CURRENT_TIMESTAMP = int(time.time())
 
-metric_labels = list(_pelorus_metric_to_dict(CommitTimePelorusPayload).values())
+metric_labels = list(_pelorus_metric_to_dict(CommitTimePelorusPayload).keys())
 
 in_memory_test_committime_metrics = PelorusGaugeMetricFamily(
     "test_committime_metrics",
@@ -59,21 +59,7 @@ class TestInMemoryMetric:
     def teardown_method(self):
         REGISTRY.unregister(self.custom_collector)
 
-    @pytest.mark.parametrize(
-        "name,timestamp,image_hash,namespace,commit_hash",
-        [
-            (
-                "todolist",
-                str(CURRENT_TIMESTAMP),
-                "sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d",
-                "mynamespace",
-                "5379bad65a3f83853a75aabec9e0e43c75fd18fc",
-            ),
-        ],
-    )
-    def test_pelorus_gauge_metric_family(
-        self, name, timestamp, image_hash, namespace, commit_hash
-    ):
+    def test_pelorus_gauge_metric_family(self):
         """
         Verifies if the metric passed to the pelorus_metric_to_prometheus method
         and then registered in our CustomCommitCollector is properly collected
@@ -81,6 +67,11 @@ class TestInMemoryMetric:
         timestamp of that metric to the timestamp of the data received from
         Prometheus.
         """
+        name = "todolist"
+        timestamp = str(CURRENT_TIMESTAMP)
+        image_hash = "sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d"
+        namespace = "mynamespace"
+        commit_hash = "5379bad65a3f83853a75aabec9e0e43c75fd18fc"
         commit_payload = CommitTimePelorusPayload(
             app=name,
             timestamp=timestamp,
@@ -99,7 +90,7 @@ class TestInMemoryMetric:
         metric_labels = {
             "app": f"/{name}/",
             "image_sha": image_hash,
-            "commit_hash": commit_hash,
+            "commit": commit_hash,
             "namespace": namespace,
         }
 
@@ -112,17 +103,7 @@ class TestInMemoryMetric:
 
 
 def test_all_models_have_prometheus_mappings():
-    """
-    Safeguard test to ensure new PelorusPayload models also have
-    corresponding Prometheus model.
-
-    It does this by verifying if all models which are inheriting
-    from PelorusPayload class returns non empty dictionary from the
-    _pelorus_metric_to_dict method, where the mappings are defined.
-
-    We need to test this scenario to ensure we know how to store
-    each of the Pelorus data models into Prometheus.
-    """
+    """Ensure all PelorusPayload subclasses have non-empty Prometheus mappings."""
     import webhook.models.pelorus_webhook as pelorus_webhook
 
     test_models = []
@@ -140,13 +121,8 @@ class NewPelorusPayloadModel(PelorusPayload):
     pass
 
 
-def test_model_do_not_have_prometheus_mapping():
-    """
-    Negative safeguard test to ensure that proper Error is raised
-    when the new models which are inheriting from PelorusPayload
-    model do not have corresponding Prometheus model defined in
-    the _pelorus_metric_to_dict method.
-    """
+def test_model_does_not_have_prometheus_mapping():
+    """Ensure TypeError is raised for PelorusPayload subclasses without Prometheus mappings."""
 
     with pytest.raises(TypeError) as type_error:
         _pelorus_metric_to_dict(NewPelorusPayloadModel)
@@ -158,15 +134,7 @@ def test_model_do_not_have_prometheus_mapping():
     return_value={"app": "nonexisting"},
 )
 def test_model_missing_value_in_model(*args):
-    """
-    Negative safeguard test to ensure that the model which is
-    inheriting from the PelorusPayload  model does match
-    expected Prometheus model defined in the _pelorus_metric_to_dict
-    method.
-
-    It does this by verifying if all the expected variables are defined
-    in the PelorusPayload model, otherwise raising TypeError.
-    """
+    """Ensure TypeError is raised when Prometheus mapping references attributes not present in the model."""
 
     with pytest.raises(TypeError) as type_error:
         pelorus_metric_to_prometheus(NewPelorusPayloadModel)

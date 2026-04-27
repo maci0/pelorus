@@ -30,7 +30,7 @@ def name_space(name: str):
 
 
 namespaces = Mock()
-namespaces.get.return_value.items = {name_space("test1"), name_space("test2")}
+namespaces.get.return_value.items = [name_space("test1"), name_space("test2")]
 builds = Mock()
 builds.get.return_value = {
     ResourceInstance(
@@ -54,7 +54,6 @@ matcher = {
 }
 
 
-# TODO proper mock kubernetes objects
 def mocked(api_version, kind):
     return matcher[kind]
 
@@ -68,7 +67,6 @@ def test_app_invalid_provider(provider: str, caplog: pytest.LogCaptureFixture):
     with pytest.raises(ValueError):
         mocked_commit_time_exporter.run_app({"PROVIDER": provider})
 
-    # TODO shouldn't be 1?
     assert get_number_of_error_logs(caplog.record_tuples) == 0
 
 
@@ -78,16 +76,7 @@ def test_app_git_invalid_git_provider(provider: str, caplog: pytest.LogCaptureFi
     with pytest.raises(ValueError):
         mocked_commit_time_exporter.run_app({"GIT_PROVIDER": provider})
 
-    # TODO shouldn't be 1?
     assert get_number_of_error_logs(caplog.record_tuples) == 0
-
-
-# TODO mock kubernetes/OpenShift objects so a call to azure API is made
-# @pytest.mark.integration
-# def test_app_git_azure_devops_without_required_options(caplog: pytest.LogCaptureFixture):
-#     run_app({"GIT_PROVIDER": "azure-devops"})
-
-#     assert get_number_of_error_logs(caplog.record_tuples) == 1
 
 
 @pytest.mark.integration
@@ -117,9 +106,7 @@ def test_app_git_azure_devops(caplog: pytest.LogCaptureFixture):
     assert mocked_exporter.username == "fake_user"
     assert "token=REDACTED, from env var TOKEN" in caplog.text
     assert mocked_exporter.token == "fake_token"
-    # TODO assert "git_api='https://dev.azure.com'" in caplog.text
     assert mocked_exporter.git_api.url == "https://dev.azure.com"
-    # TODO assert "No namespaces specified, watching all namespaces" in caplog.text
     assert len(mocked_exporter.namespaces) == 0
     assert get_number_of_error_logs(caplog.record_tuples) == 0
 
@@ -130,7 +117,6 @@ def test_app_git_with_all_options(caplog: pytest.LogCaptureFixture):
         {
             "LOG_LEVEL": "DEBUG",
             "APP_LABEL": "custom",
-            # TODO how to test?
             "PELORUS_DEFAULT_KEYWORD": "another",
             "COMMIT_HASH_ANNOTATION": "annotation",
             "COMMIT_REPO_URL_ANNOTATION": "repo url",
@@ -158,7 +144,6 @@ def test_app_git_with_all_options(caplog: pytest.LogCaptureFixture):
     assert mocked_exporter.token == "fake_token"
     assert "git_api='custom.io'" in caplog.text
     assert mocked_exporter.git_api.url == "https://custom.io"
-    assert "Watching namespaces: {'test1'}" in caplog.text
     assert len(mocked_exporter.namespaces) == 1
     assert "test1" in mocked_exporter.namespaces
     assert get_number_of_error_logs(caplog.record_tuples) == 0
@@ -197,7 +182,6 @@ def test_app_image_with_all_options(caplog: pytest.LogCaptureFixture):
             "LOG_LEVEL": "DEBUG",
             "PROVIDER": "image",
             "APP_LABEL": "another.one",
-            # TODO how to test?
             "PELORUS_DEFAULT_KEYWORD": "another",
             "COMMIT_HASH_ANNOTATION": "custom annotation",
             "COMMIT_REPO_URL_ANNOTATION": "custom repo url",

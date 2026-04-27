@@ -31,10 +31,10 @@ def run_prometheus_register(collector: AbstractPelorusExporter) -> None:
 
 class MockExporter:
     def __init__(
-        self, set_up: Callable[[], AbstractPelorusExporter], mock_kube_client=Mock()
+        self, set_up: Callable[[], AbstractPelorusExporter], mock_kube_client=None
     ) -> None:
         self.set_up = set_up
-        self.mock_kube_client = mock_kube_client
+        self.mock_kube_client = mock_kube_client if mock_kube_client is not None else Mock()
 
     def run_app(self, arguments: Dict[str, str]) -> AbstractPelorusExporter:
         """Run set up of exporter app with desired environment variables."""

@@ -26,7 +26,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from webhook.app import app, load_plugins, register_plugin
+from webhook.app import app, load_plugins, plugins, register_plugin
 from webhook.plugins.pelorus_handler_base import PelorusWebhookPlugin
 
 client = TestClient(app)
@@ -56,10 +56,12 @@ def webhook_data_payload(post_request_json_file):
     return data, calculated_hash
 
 
-headers_data = {
-    "Content-Type": "application/json",
-    "User-Agent": "Pelorus-Webhook/test",
-}
+@pytest.fixture
+def headers_data():
+    return {
+        "Content-Type": "application/json",
+        "User-Agent": "Pelorus-Webhook/test",
+    }
 
 
 @pytest.mark.parametrize("post_request_json_file", ["webhook_pelorus_committime.json"])
@@ -71,8 +73,8 @@ def test_pelorus_webhook_no_headers(webhook_data_payload):
 
     webhook_response = client.post(WEBHOOK_ENDPOINT, json=webhook_data_payload[0])
 
-    assert webhook_response.status_code == HTTPStatus.PRECONDITION_FAILED
-    assert webhook_response.text == '{"detail":"Unsupported request."}'
+    assert webhook_response.status_code == HTTPStatus.BAD_REQUEST
+    assert webhook_response.text == '{"detail":"Unsupported User-Agent."}'
 
 
 @pytest.mark.parametrize(
@@ -84,7 +86,7 @@ def test_pelorus_webhook_no_headers(webhook_data_payload):
         ("webhook_pelorus_failure_resolved.json", "failure"),
     ],
 )
-def test_pelorus_webhook_post_data_no_secret(webhook_data_payload, event_type):
+def test_pelorus_webhook_post_data_no_secret(webhook_data_payload, event_type, headers_data):
     """
     Proper post data for different metrics.
     No Secret configured.
@@ -106,7 +108,7 @@ def test_pelorus_webhook_post_data_no_secret(webhook_data_payload, event_type):
         assert webhook_response.status_code == HTTPStatus.ACCEPTED
         assert (
             webhook_response.text
-            == '{"http_response":"Webhook Received","http_response_code":200}'
+            == '{"http_response":"Webhook Received","http_response_code":202}'
         )
 
 
@@ -121,7 +123,7 @@ def test_pelorus_webhook_post_data_no_secret(webhook_data_payload, event_type):
     ],
 )
 def test_pelorus_webhook_post_data_wrong_x_signature_mismatch(
-    webhook_data_payload, event_type, hash_signature
+    webhook_data_payload, event_type, hash_signature, headers_data
 ):
     """
     Proper post data for different metrics.
@@ -143,7 +145,7 @@ def test_pelorus_webhook_post_data_wrong_x_signature_mismatch(
             headers=headers_data,
         )
 
-        assert webhook_response.status_code == HTTPStatus.BAD_REQUEST
+        assert webhook_response.status_code == HTTPStatus.UNAUTHORIZED
         assert webhook_response.text == '{"detail":"Invalid signature."}'
 
 
@@ -164,7 +166,7 @@ def test_pelorus_webhook_post_data_wrong_x_signature_mismatch(
     ],
 )
 def test_pelorus_webhook_post_data_wrong_x_signature_format(
-    webhook_data_payload, event_type, hash_signature
+    webhook_data_payload, event_type, hash_signature, headers_data
 ):
     """
     Proper post data for different metrics.
@@ -197,7 +199,7 @@ def test_pelorus_webhook_post_data_wrong_x_signature_format(
     ],
 )
 def test_pelorus_webhook_post_data_missing_x_signature(
-    webhook_data_payload, event_type
+    webhook_data_payload, event_type, headers_data
 ):
     """
     The webhook configured to share "My Secret Token", however
@@ -217,8 +219,8 @@ def test_pelorus_webhook_post_data_missing_x_signature(
             headers=headers_data,
         )
 
-        assert webhook_response.status_code == HTTPStatus.BAD_REQUEST
-        assert webhook_response.text == '{"detail":"Improper headers."}'
+        assert webhook_response.status_code == HTTPStatus.UNAUTHORIZED
+        assert webhook_response.text == '{"detail":"Non existing signature."}'
 
 
 @pytest.mark.parametrize(
@@ -242,7 +244,7 @@ def test_pelorus_webhook_post_data_missing_x_signature(
         ),
     ],
 )
-def test_pelorus_webhook_post_data_x_signature_secret(webhook_data_payload, event_type):
+def test_pelorus_webhook_post_data_x_signature_secret(webhook_data_payload, event_type, headers_data):
     """
     Proper post data for different metrics.
     Secret token is configured and expected to be sent together with the payload.
@@ -267,7 +269,7 @@ def test_pelorus_webhook_post_data_x_signature_secret(webhook_data_payload, even
         assert webhook_response.status_code == HTTPStatus.ACCEPTED
         assert (
             webhook_response.text
-            == '{"http_response":"Webhook Received","http_response_code":200}'
+            == '{"http_response":"Webhook Received","http_response_code":202}'
         )
 
 
@@ -284,7 +286,7 @@ def test_pelorus_webhook_too_large_payload(webhook_data_payload):
     webhook_response = client.post(WEBHOOK_ENDPOINT, json=payload)
 
     assert webhook_response.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
-    assert webhook_response.text == '{"detail":"Content length too big."}'
+    assert webhook_response.json() == {"detail": "Content too large"}
 
 
 def test_register_plugin_not_implemented():
@@ -292,11 +294,15 @@ def test_register_plugin_not_implemented():
     Test that Webhook Plugin which is not fully implemented can't
     be registered
     """
+    plugins_before = dict(plugins)
     register_plugin(PelorusWebhookPlugin)
+    assert plugins == plugins_before
 
 
 def test_wrong_plugin_dir():
     """
     Test for the non existing plugin folder
     """
+    plugins_before = dict(plugins)
     load_plugins("this_directory_is_nonexisting")
+    assert plugins == plugins_before

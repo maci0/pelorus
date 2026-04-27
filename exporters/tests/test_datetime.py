@@ -151,7 +151,7 @@ def test_to_epoch_from_string_bad_arg(timestamps):
 )
 @mock.patch("pelorus.timeutil.datetime")
 def test_sample_too_old(mock_datetime, metric_timestamp, expected):
-    mocked_current_datetime = datetime.fromtimestamp(1681828643)
+    mocked_current_datetime = datetime.fromtimestamp(1681828643, tz=timezone.utc)
 
     mock_datetime.now.return_value = mocked_current_datetime
     mock_datetime.fromtimestamp = datetime.fromtimestamp

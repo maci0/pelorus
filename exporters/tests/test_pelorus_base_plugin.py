@@ -21,7 +21,7 @@ from typing import Any, Awaitable
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from pydantic import ValidationError, parse_obj_as
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import override
 
 from webhook.models.pelorus_webhook import (
@@ -87,33 +87,24 @@ def test_pelorus_webhook_pong_response():
     with pytest.raises(HTTPException) as http_exception:
         PelorusWebhookResponse.pong(None)
 
-    assert type(http_exception).__name__ == "ExceptionInfo"
-    assert http_exception.typename == "HTTPException"
-
     assert http_exception.value.detail == "pong"
     assert http_exception.value.status_code == http.HTTPStatus.OK
 
 
 def test_abstract_classes():
-    """
-    Test for the plugin that did not implement required abstract methods.
-    """
+    """Instantiating a plugin without implementing abstract methods raises TypeError."""
 
     class MyPelorusWebhookPlugin(PelorusWebhookPlugin):
         def __init__(self, handshake_headers: Headers, request: Request) -> None:
             super().__init__(handshake_headers, request)
 
-    # We should get an error:
-    # TypeError: Can't instantiate abstract class MyPelorusWebhookPlugin with abstract
-    #            methods _receive_pelorus_payload, handshake
     with pytest.raises(TypeError) as type_error:
         MyPelorusWebhookPlugin(None, None)
 
-    assert (
-        str(type_error.value)
-        == "Can't instantiate abstract class MyPelorusWebhookPlugin "
-        + "with abstract methods _handshake, _receive_pelorus_payload"
-    )
+    msg = str(type_error.value)
+    assert "MyPelorusWebhookPlugin" in msg
+    assert "_handshake" in msg
+    assert "_receive_pelorus_payload" in msg
 
 
 class SimplePelorusWebhookPlugin(PelorusWebhookPlugin):
@@ -126,16 +117,12 @@ class SimplePelorusWebhookPlugin(PelorusWebhookPlugin):
         pass
 
 
-@pytest.mark.parametrize(
-    "handshake_headers,request_data",
-    [
-        ("Header.", "request data"),
-    ],
-)
-def test_pelorus_webhook_plugin_abc(handshake_headers, request_data):
+def test_pelorus_webhook_plugin_abc():
     """
     Test for the plugin that did implement required abstract methods.
     """
+    handshake_headers = "Header."
+    request_data = "request data"
 
     plugin_instance = SimplePelorusWebhookPlugin(
         handshake_headers=handshake_headers, request=request_data
@@ -219,15 +206,13 @@ def test_check_is_pelorus_not_webhook_handler():
 class UserAgentWebhookPlugin(PelorusWebhookPlugin):
     @override
     async def _handshake(self, headers: Headers) -> Awaitable[bool]:
-        time.sleep(0.1)
         return True
 
     @override
     async def _receive_pelorus_payload(
         self, json_payload_data: Any
     ) -> Awaitable[PelorusMetric]:
-        time.sleep(0.1)
-        pelorus_data = parse_obj_as(CommitTimePelorusPayload, json_payload_data)
+        pelorus_data = TypeAdapter(CommitTimePelorusPayload).validate_python(json_payload_data)
         metric = PelorusMetric(
             metric_spec=PelorusMetricSpec.COMMIT_TIME, metric_data=pelorus_data
         )
@@ -292,24 +277,19 @@ async def test_handshake():
     assert result
 
 
-@pytest.mark.parametrize(
-    "json_payload",
-    [
-        """{
-            "app": "mongo-todolist",
-            "commit_hash": "5379bad65a3f83853a75aabec9e0e43c75fd18fc",
-            "image_sha": "sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d",
-            "namespace": "mongo-persistent"
-        }""",
-    ],
-)
 @pytest.mark.asyncio
-async def test_proper_receive_metric(json_payload):
+async def test_proper_receive_metric():
     """
     Test if the receive() wrapper method that calls
     plugin's _receive() method returns proper
     PelorusMetric data.
     """
+    json_payload = """{
+        "app": "mongo-todolist",
+        "commit_hash": "5379bad65a3f83853a75aabec9e0e43c75fd18fc",
+        "image_sha": "sha256:af4092ccbfa99a3ec1ea93058fe39b8ddfd8db1c7a18081db397c50a0b8ec77d",
+        "namespace": "mongo-persistent"
+    }"""
 
     with patch(
         "webhook.plugins.pelorus_handler_base.PelorusWebhookPlugin._receive",
@@ -325,12 +305,7 @@ async def test_proper_receive_metric(json_payload):
 
 @pytest.mark.asyncio
 async def test_improper_receive_metric():
-    """
-    Test case for the receive() wrapper method that calls
-    plugin's _receive() method in which data from the plugin
-    is not a proper PelorusMetric type.
-    In such case it raises TypeError.
-    """
+    """receive() raises TypeError when plugin returns non-PelorusMetric data."""
 
     with patch(
         "webhook.plugins.pelorus_handler_base.PelorusWebhookPlugin._receive",
