@@ -1,0 +1,9 @@
+*.md
+bundle/
+config/
+Dockerfile
+bundle.Dockerfile
+.dockerignore
+.git/
+.gitignore
+.github/
