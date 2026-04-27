@@ -1,6 +1,8 @@
 *.md
 requirements-dev.txt
 tests/
+Dockerfile
+Containerfile
 .dockerignore
 .git/
 .gitignore

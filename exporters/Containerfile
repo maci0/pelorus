@@ -7,7 +7,8 @@ ENV PYTHONPATH=$WORK_DIR
 
 USER root
 
-RUN (dnf -y install skopeo && dnf clean all) || echo "skopeo not available, container image commit detection disabled" && \
+RUN dnf -y install skopeo && \
+    dnf clean all && \
     mkdir -p $WORK_DIR && \
     chown -R 1001:0 $WORK_DIR
 
