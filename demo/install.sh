@@ -255,7 +255,7 @@ metadata:
 spec:
   openshift_prometheus_basic_auth_pass: "$PELORUS_PASSWORD"
   operator_source: $OPERATOR_SOURCE
-  oauth_proxy_enabled: false
+  oauth_proxy_enabled: true
   prometheus_retention: 1y
   prometheus_retention_size: 1GB
   prometheus_storage: false
